@@ -1,0 +1,16 @@
+{
+  "name": "miglife-bot",
+  "version": "2.0.0",
+  "description": "Single-file bot for web.miglife.app with parent remote control",
+  "main": "miglife.js",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node miglife.js",
+    "diagnose": "node miglife.js --diagnose",
+    "inspect": "node miglife.js --inspect",
+    "pm-test": "node miglife.js --pm-test"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  }
+}

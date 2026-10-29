@@ -1,0 +1,303 @@
+# ══════════════════════════════════════════════════════════════
+#  at.txt — Auto-Text Messages
+#  Lines starting with # are comments and will be ignored.
+#  One message per line. Messages are sent in order, then loop.
+#  Use command: |at on <room_id> $account
+#  Set interval: |at interval <minutes> $account
+# ══════════════════════════════════════════════════════════════
+# AUTO-TEXT FILE - 288 Messages (24 hours × 12 messages/hour)
+# Each message will be sent sequentially every 5 minutes
+# When it reaches the end, it loops back to line 1
+
+Good morning! Welcome to our chat room 🌅
+Have a wonderful day ahead! ☀️
+Remember to stay hydrated 💧
+Coffee time! ☕ Who wants some?
+Productivity tip: Take short breaks every hour 💡
+Don't forget to smile today! 😊
+Motivation: You're doing great! Keep going! 💪
+Fun fact: Honey never spoils 🍯
+Quote: "Believe you can and you're halfway there" ✨
+Tech tip: Backup your important files regularly 💾
+Health reminder: Stretch your body! 🤸
+Music break: What's your favorite song? 🎵
+Mid-morning energy boost! Let's go! ⚡
+Remember to check your messages 📱
+Stay positive, work hard, make it happen! 🌟
+Knowledge: Learning something new every day 📚
+Friendship: Tag a friend and say hi! 👋
+Creative moment: Share your ideas! 💭
+Gaming time: What are you playing today? 🎮
+Food talk: What's for lunch? 🍜
+Weather check: How's it outside? 🌤️
+Photo moment: Share your best pic! 📷
+Laugh break: Tell us a joke! 😄
+Travel dreams: Where would you go? ✈️
+Achievement unlocked: Celebrate small wins! 🏆
+Afternoon vibes: Halfway through the day! 🌞
+Brain teaser: Can you solve this riddle? 🧩
+Sports update: Who's your favorite team? ⚽
+Movie recommendation time! 🎬
+Book lovers: What are you reading? 📖
+Art appreciation: Share creative work! 🎨
+Snack time! What's your favorite? 🍿
+Wellness check: How are you feeling? 💚
+Gratitude moment: What are you thankful for? 🙏
+Community love: We appreciate you! ❤️
+Evening is approaching! Time flies! 🌆
+Dinner plans? Share your meal! 🍽️
+Relaxation time: Deep breaths 🧘
+Family time: Call your loved ones 📞
+Hobby hour: What do you enjoy? 🎪
+Sunset appreciation 🌅
+Good evening everyone! 🌙
+Wind down time: Take it easy 😌
+Night owls: Who's still awake? 🦉
+Star gazing: Look at the sky ⭐
+Dream big! Sleep well! 💤
+Tomorrow is a new day! 🌈
+Good night! Sweet dreams! 😴
+Welcome new members! 🎉
+Rules reminder: Be respectful always 📋
+Event announcement: Stay tuned! 📢
+Weekly challenge starts soon! 🎯
+Trivia time: Test your knowledge! 🤔
+Poll: Vote for your choice! 🗳️
+Discussion topic: Share your thoughts 💬
+Success story: Share your wins! 🌟
+Help desk: Need assistance? Ask us! 🆘
+Feedback welcome: We're listening! 👂
+Update: Check our latest news! 📰
+Reminder: Important announcement coming! ⚠️
+Celebration: Happy birthday members! 🎂
+Milestone: We hit a new record! 🎊
+Thank you: For being awesome! 🙌
+Inspiration: You inspire us! 💫
+Connect: Make new friends here! 🤝
+Support: We're here for you! 💙
+Unity: Together we're stronger! 🤜🤛
+Peace: Spread love not hate! ☮️
+Kindness: Do something nice today! 💝
+Respect: Treat others well! 🌟
+Trust: Build lasting friendships! 🤗
+Hope: Never give up! 🌈
+Faith: Believe in yourself! ⭐
+Love: Share the love! 💖
+Joy: Find happiness in little things! 😊
+Courage: Be brave! 🦁
+Wisdom: Learn from experiences! 📚
+Patience: Good things take time! ⏰
+Growth: Keep improving! 🌱
+Balance: Work-life harmony! ⚖️
+Focus: Stay on track! 🎯
+Energy: Recharge your batteries! 🔋
+Clarity: Clear mind, clear goals! 💎
+Purpose: Find your why! 🔍
+Action: Make it happen! 🚀
+Results: See your progress! 📈
+Excellence: Aim for the best! 🏅
+Innovation: Think outside the box! 💡
+Creativity: Express yourself! 🎨
+Passion: Do what you love! ❤️
+Dedication: Stay committed! 💪
+Persistence: Never quit! 🔥
+Resilience: Bounce back! 🌟
+Adaptability: Go with the flow! 🌊
+Flexibility: Bend don't break! 🤸
+Strength: You're stronger than you think! 💪
+Confidence: Believe in yourself! ✨
+Positivity: Choose happiness! 😃
+Optimism: See the bright side! 🌞
+Gratitude: Count your blessings! 🙏
+Mindfulness: Be present! 🧘
+Awareness: Stay conscious! 👁️
+Consciousness: Expand your mind! 🧠
+Understanding: Seek to learn! 📖
+Empathy: Feel with others! 💗
+Compassion: Show you care! 🤲
+Generosity: Give freely! 🎁
+Humility: Stay grounded! 🌍
+Integrity: Do what's right! ⚖️
+Honesty: Speak truth! 🗣️
+Transparency: Be open! 🔓
+Authenticity: Be yourself! 💯
+Originality: Stand out! 🌟
+Uniqueness: You're special! 💎
+Individuality: Embrace differences! 🌈
+Diversity: Celebrate variety! 🎨
+Inclusion: Everyone belongs! 🤝
+Equality: All are equal! ⚖️
+Justice: Fight for what's right! ⚔️
+Freedom: Live freely! 🦅
+Liberty: Protect rights! 🗽
+Democracy: Voice matters! 🗳️
+Citizenship: Be responsible! 🏛️
+Community: We're family! 👨‍👩‍👧‍👦
+Society: Better together! 🏘️
+Humanity: Care for all! 🌍
+Planet: Protect Earth! 🌎
+Nature: Appreciate beauty! 🌿
+Environment: Go green! ♻️
+Sustainability: Think future! 🌱
+Conservation: Save resources! 💧
+Ecology: Balance is key! 🦋
+Wildlife: Protect animals! 🐾
+Ocean: Keep it clean! 🌊
+Forest: Plant trees! 🌲
+Air: Breathe clean! 🌬️
+Water: Conserve it! 💦
+/gift all candy
+Energy: Use wisely! ⚡
+Resources: Don't waste! 🔋
+Future: Build better tomorrow! 🚀
+Technology: Embrace progress! 💻
+Science: Discover more! 🔬
+Medicine: Health is wealth! 💊
+Education: Knowledge is power! 🎓
+Learning: Never stop! 📚
+Teaching: Share wisdom! 👨‍🏫
+Training: Develop skills! 🏋️
+Practice: Makes perfect! 🎯
+Experience: Best teacher! 🧭
+Experiment: Try new things! 🧪
+Explore: Adventure awaits! 🗺️
+Discover: Find treasures! 💰
+Create: Make something! 🎨
+Build: Construct dreams! 🏗️
+Design: Shape future! ✏️
+Develop: Grow constantly! 🌱
+Improve: Get better! 📈
+Optimize: Fine tune! ⚙️
+Enhance: Add value! ✨
+Upgrade: Level up! ⬆️
+Transform: Change for good! 🦋
+Evolve: Keep adapting! 🔄
+Progress: Move forward! ➡️
+Advance: Push boundaries! 🚀
+Achieve: Reach goals! 🎯
+Accomplish: Get it done! ✅
+Complete: Finish strong! 🏁
+Success: You made it! 🏆
+Victory: Celebrate wins! 🎉
+Triumph: Overcome challenges! 💪
+Champion: Be the best! 👑
+Winner: You deserve it! 🥇
+Leader: Guide others! 🧭
+Pioneer: Blaze trails! 🔥
+Innovator: Create new! 💡
+Visionary: See ahead! 🔮
+Dreamer: Dream big! 💭
+Believer: Have faith! 🌟
+Achiever: Make it real! ✨
+Doer: Take action! 🎬
+Maker: Build things! 🛠️
+Creator: Bring to life! 🎨
+Artist: Express beauty! 🖼️
+Musician: Make melodies! 🎵
+Dancer: Move with grace! 💃
+Singer: Share your voice! 🎤
+Writer: Tell stories! ✍️
+Poet: Craft verses! 📜
+Author: Write books! 📚
+Storyteller: Captivate minds! 📖
+Speaker: Inspire crowds! 🗣️
+Presenter: Share ideas! 🎤
+Teacher: Educate minds! 👨‍🏫
+Mentor: Guide others! 🧑‍🏫
+Coach: Train winners! 🏅
+Trainer: Build skills! 💪
+Guide: Show the way! 🧭
+Advisor: Give wisdom! 💡
+Consultant: Solve problems! 🔍
+Expert: Master your craft! 🎯
+Professional: Excel always! 💼
+Specialist: Be the best! 🌟
+Master: Perfect your art! 🏆
+Guru: Share knowledge! 📚
+Sage: Speak wisdom! 🧙
+Wizard: Work magic! ⚡
+Champion: Win always! 🥇
+Hero: Save the day! 🦸
+Legend: Leave a legacy! 👑
+Icon: Inspire generations! ✨
+Star: Shine bright! ⭐
+Celebrity: Be famous! 🌟
+Influencer: Impact lives! 💫
+Leader: Lead by example! 🚀
+Boss: Take charge! 💼
+Chief: Command respect! 👔
+Director: Guide vision! 🎬
+Manager: Organize well! 📊
+Supervisor: Oversee success! 👁️
+Coordinator: Bring together! 🤝
+Organizer: Plan perfectly! 📋
+Planner: Think ahead! 🗓️
+Strategist: Win smartly! 🎯
+Tactician: Execute well! ⚔️
+Executor: Get it done! ✅
+Implementer: Make it work! 🛠️
+Operator: Run smoothly! ⚙️
+Worker: Do the work! 💪
+Employee: Give your best! 🌟
+Colleague: Work together! 🤝
+Partner: Collaborate! 🤜🤛
+Teammate: Support each other! 👥
+Member: Belong here! 🏠
+Participant: Join in! 🎪
+Contributor: Add value! ✨
+Supporter: Be there! 🤗
+Fan: Show love! ❤️
+Follower: Stay connected! 📱
+Friend: True friendship! 👯
+Buddy: Best friends! 🤝
+Pal: Good times! 🎉
+Companion: Journey together! 🚶
+Associate: Work together! 💼
+Acquaintance: Nice to meet! 👋
+Neighbor: Good vibes! 🏘️
+Citizen: Be proud! 🏛️
+Resident: Call it home! 🏡
+Inhabitant: Live well! 🌆
+Occupant: Make it yours! 🔑
+Tenant: Rent wisely! 🏠
+Homeowner: Invest smart! 🏡
+Landlord: Manage well! 🏢
+Builder: Construct dreams! 🏗️
+Architect: Design future! 📐
+Engineer: Build solutions! ⚙️
+Developer: Code the future! 💻
+Programmer: Write logic! 👨‍💻
+Coder: Debug life! 🐛
+Hacker: Think different! 🔐
+Designer: Create beauty! 🎨
+Artist: Express freely! 🖌️
+Painter: Color the world! 🎨
+Sculptor: Shape reality! 🗿
+Photographer: Capture moments! 📸
+Videographer: Film life! 🎥
+Editor: Perfect it! ✂️
+Producer: Make it happen! 🎬
+Director: Lead the vision! 📽️
+Actor: Play your part! 🎭
+Performer: Entertain all! 🎪
+Entertainer: Spread joy! 🎉
+Comedian: Make them laugh! 😂
+Magician: Create wonder! ✨
+Illusionist: Amaze minds! 🎩
+Juggler: Balance it all! 🤹
+Acrobat: Flip expectations! 🤸
+Athlete: Push limits! 🏃
+Runner: Go the distance! 🏃‍♂️
+Swimmer: Dive deep! 🏊
+Cyclist: Keep pedaling! 🚴
+Climber: Reach the top! 🧗
+Hiker: Enjoy the journey! 🥾
+Traveler: Explore the world! 🌍
+Adventurer: Seek thrills! 🏔️
+Explorer: Discover new! 🗺️
+Wanderer: Roam free! 🚶
+Nomad: Go anywhere! 🏕️
+Pilgrim: Find meaning! 🚶‍♂️
+Seeker: Search for truth! 🔍
+Finder: Discover treasures! 💎
+Good morning again! New cycle! 🌅

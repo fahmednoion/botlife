@@ -1,0 +1,22 @@
+{
+  "singing": {
+    "count": 1,
+    "lastViolation": 1783852104057,
+    "warnings": 3
+  },
+  "joku": {
+    "count": 3,
+    "lastViolation": 1783851079074,
+    "warnings": 1
+  },
+  "syringe": {
+    "count": 3,
+    "lastViolation": 1784122011638,
+    "warnings": 1
+  },
+  "bot": {
+    "count": 1,
+    "lastViolation": 1793253975500,
+    "warnings": 0
+  }
+}

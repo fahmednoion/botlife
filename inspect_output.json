@@ -1,0 +1,148 @@
+{
+  "Bangladesh": [
+    {
+      "id": "e1OHPmMG09pGwprUPQ2O",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Bangladesh: vip [6] 🛠️ has entered.",
+        "sender": "vip",
+        "senderUid": "20xICWHPGuP8JpIG8PwRlwkRw3G3",
+        "type": "room_entry",
+        "createdAt": "2026-10-28T12:01:48.286Z"
+      }
+    },
+    {
+      "id": "lucky_1793188800000",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "nullValue",
+        "type": "stringValue",
+        "giftName": "stringValue",
+        "clientCreatedAt": "integerValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "🍀 Lucky Bot: Congratulations lomi! You are the Lucky User — pink ID for 3 hours, +1 level and 5000 coins added to your account! 🎉",
+        "sender": "Lucky Bot",
+        "senderUid": null,
+        "type": "chat",
+        "giftName": "",
+        "clientCreatedAt": 1793188808045,
+        "createdAt": "2026-10-28T12:00:08.131Z"
+      }
+    },
+    {
+      "id": "leave_2pGIS30FiqdOx2ADycxwsSQ8eUf1_3294a29dbc2c",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Bangladesh: akib [9] 🏵️ has left.",
+        "sender": "akib",
+        "senderUid": "2pGIS30FiqdOx2ADycxwsSQ8eUf1",
+        "type": "room_leave",
+        "createdAt": "2026-10-28T11:59:03.710Z"
+      }
+    },
+    {
+      "id": "leave_20xICWHPGuP8JpIG8PwRlwkRw3G3_bb79e62fa20d",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Bangladesh: vip [6] 🛠️ has left.",
+        "sender": "vip",
+        "senderUid": "20xICWHPGuP8JpIG8PwRlwkRw3G3",
+        "type": "room_leave",
+        "createdAt": "2026-10-28T11:55:08.398Z"
+      }
+    },
+    {
+      "id": "tx80ld7WOwC789oMUB0J",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "nullValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Hurray! A small gift for you. You have 40 seconds to pick the voucher [code] 177424. Type /pick [code] to get the voucher. (Amount 54 coins).",
+        "sender": "System",
+        "senderUid": null,
+        "type": "voucher_drop",
+        "createdAt": "2026-10-28T11:43:06.774Z"
+      }
+    },
+    {
+      "id": "R5aLBf8Kh8rSEDUz67Hz",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "giftName": "stringValue",
+        "createdAt": "timestampValue",
+        "clientCreatedAt": "integerValue"
+      },
+      "data": {
+        "text": "<<🎁*GIFT SHOWER* lomi[61] gives a miglife 🎁 to onik, akib, sabuj, sailor, nitz and 7 other! Hurray!>>",
+        "sender": "lomi",
+        "senderUid": "egRC5hSH33MPGEgSEWh9omxM3Ce2",
+        "type": "gift",
+        "giftName": "miglife",
+        "createdAt": "2026-10-28T11:36:05.909Z",
+        "clientCreatedAt": 1793187365929
+      }
+    },
+    {
+      "id": "leave_YtsolSXzije4n9EKkMaD358hmfy2_9de4ec758ce7",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Bangladesh: osman [3] has left.",
+        "sender": "osman",
+        "senderUid": "YtsolSXzije4n9EKkMaD358hmfy2",
+        "type": "room_leave",
+        "createdAt": "2026-10-28T11:25:57.923Z"
+      }
+    },
+    {
+      "id": "leave_YCe9yHJ7BgN6L8iqP5ljttjn8JS2_f5c734d38d76",
+      "types": {
+        "text": "stringValue",
+        "sender": "stringValue",
+        "senderUid": "stringValue",
+        "type": "stringValue",
+        "createdAt": "timestampValue"
+      },
+      "data": {
+        "text": "Bangladesh: dad [27] 🎬 has left.",
+        "sender": "dad",
+        "senderUid": "YCe9yHJ7BgN6L8iqP5ljttjn8JS2",
+        "type": "room_leave",
+        "createdAt": "2026-10-28T11:25:03.785Z"
+      }
+    }
+  ]
+}
