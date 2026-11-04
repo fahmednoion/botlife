@@ -1,13 +1,7 @@
 /**
- * miglife.js — single-file miglife bot v6
- * ✓ Full nowfel-style feature parity
- * ✓ Cloud Functions routing (voucher/gift/moderation)
- * ✓ Client-command rendering (/roll /thank /sing /boo /agree …)
- * ✓ /gift interception (sendGift / sendGiftShower)
- * ✓ Fire-and-forget sends — no queue, no stuck
- * ✓ {arg} → "everyone" auto-fallback (all slash cmds work bare or with arg)
- * ✓ Live template management (|addcmd |delcmd |missing |cmds |rendercheck |resetcmds)
- * ✓ Diagnostic |diag + 5-min heartbeat
+ * miglife.js — single-file miglife bot v6.1
+ * Fixes: slang blocking, regex caching, watchdog state, |tr speed, learn string→object,
+ *        GENERIC_SKIP expanded, +|diag +|resetcmds, timer cleanup
  */
 "use strict";
 
@@ -29,7 +23,7 @@ catch {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  CONFIG
+//  CONFIGURATION
 // ══════════════════════════════════════════════════════════════
 const env = process.env;
 const API_KEY = env.FIREBASE_API_KEY;
@@ -46,7 +40,7 @@ const PREFIX = env.COMMAND_PREFIX || "!";
 const POLL_MS = Number(env.POLL_MS || 2500);
 const PM_POLL_MS = Number(env.PM_POLL_MS || 2000);
 const PRESENCE_MS = Number(env.PRESENCE_MS || 20000);
-const SEND_GAP_MS = Number(env.SEND_GAP_MS || 100);          // ← tiny; no longer blocks
+const SEND_GAP_MS = Number(env.SEND_GAP_MS || 1500);
 const MAX_ACCOUNTS = Number(env.MAX_ACCOUNTS || 10);
 const PM_REPLY = env.PM_REPLY !== "false";
 const ANNOUNCE_JOIN = env.ANNOUNCE_JOIN !== "false";
@@ -102,34 +96,46 @@ const AI_UNAVAILABLE_MSG = "🤖 AI is not available right now";
 const log = (...a) => console.log(`[${new Date().toTimeString().slice(0, 8)}]`, ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── extra tuning knobs ──
+const FAST_GAP_MS = Number(env.FAST_GAP_MS || 350);
+const STALL_MS = Number(env.STALL_MS || 45000);
+const LEARN_TIMEOUT_MS = Number(env.LEARN_TIMEOUT_MS || 120000);
+const SLASH_GENERIC = env.SLASH_GENERIC !== "false";
+
 // ══════════════════════════════════════════════════════════════
-//  HANG PREVENTION — fetch with timeout, timer-aware withTimeout
+//  HANG PREVENTION  (timer always cleaned up + unref'd)
 // ══════════════════════════════════════════════════════════════
 async function fetchT(url, opts = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
-  catch (e) {
-    if (e.name === "AbortError") { const err = new Error(`Timeout ${timeoutMs}ms — ${url.split("?")[0]}`); err.status = 408; err.code = "TIMEOUT"; throw err; }
-    throw e;
-  } finally { clearTimeout(timer); }
+  const tErr = () => { const err = new Error(`Timeout ${timeoutMs}ms — ${url.split("?")[0]}`); err.status = 408; err.code = "TIMEOUT"; return err; };
+  let res;
+  try { res = await fetch(url, { ...opts, signal: ctrl.signal }); }
+  catch (e) { clearTimeout(timer); throw (ctrl.signal.aborted || e.name === "AbortError") ? tErr() : e; }
+  for (const m of ["text", "json", "arrayBuffer"]) {
+    if (typeof res[m] !== "function") continue;
+    const orig = res[m].bind(res);
+    res[m] = async () => {
+      try { return await orig(); }
+      catch (e) { throw (ctrl.signal.aborted || e.name === "AbortError") ? tErr() : e; }
+      finally { clearTimeout(timer); }
+    };
+  }
+  return res;
 }
 
-// Promise.race that clears its timer on settle and unrefs (won't keep Node alive)
+// Promise.race with proper timer cleanup (both branches) + unref
 function withTimeout(promise, ms, label = "op") {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      const e = new Error(`${label} timeout ${ms}ms`);
-      e.code = "TIMEOUT";
-      reject(e);
+    const t = setTimeout(() => {
+      if (settled) return; settled = true;
+      const e = new Error(`${label} timeout ${ms}ms`); e.code = "TIMEOUT"; reject(e);
     }, ms);
-    if (timer.unref) timer.unref();
+    if (t.unref) t.unref();
     Promise.resolve(promise).then(
-      (v) => { if (settled) return; settled = true; clearTimeout(timer); resolve(v); },
-      (e) => { if (settled) return; settled = true; clearTimeout(timer); reject(e); }
+      (v) => { if (settled) return; settled = true; clearTimeout(t); resolve(v); },
+      (e) => { if (settled) return; settled = true; clearTimeout(t); reject(e); }
     );
   });
 }
@@ -144,21 +150,20 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/thanks":     "**{username} thanks everyone! 🙏**",
   "/sing":       "**{username} is singing a happy song, \"Wake up, shake up, it's a brand new day!\" 🎵**",
   "/boo":        "**{username} jumps out and boos everyone! 👻**",
-
   // GREETINGS
-  "/hi":         "**{username} says hi{arg:} 👋**",
-  "/hello":      "**{username} says hello{arg:} 👋**",
-  "/bye":        "**{username} waves goodbye{arg:} 👋**",
-  "/gm":         "**{username} says good morning{arg:}! ☀️**",
-  "/goodmorning":"**{username} says good morning{arg:}! ☀️**",
-  "/gn":         "**{username} says good night{arg:}! 🌙**",
-  "/goodnight":  "**{username} says good night{arg:}! 🌙**",
-  "/goodafternoon": "**{username} says good afternoon{arg:}! ☀️**",
-  "/goodevening":"**{username} says good evening{arg:}! 🌆**",
+  "/hi":         "**{username} says hi! 👋**",
+  "/hello":      "**{username} says hello! 👋**",
+  "/bye":        "**{username} waves goodbye! 👋**",
+  "/gm":         "**{username} says good morning! ☀️**",
+  "/goodmorning":"**{username} says good morning! ☀️**",
+  "/gn":         "**{username} says good night! 🌙**",
+  "/goodnight":  "**{username} says good night! 🌙**",
+  "/goodafternoon": "**{username} says good afternoon! ☀️**",
+  "/goodevening":"**{username} says good evening! 🌆**",
   "/welcome":    "**{username} welcomes {arg:everyone}! 🎉**",
   "/welcomeall": "**{username} welcomes everyone! 🎉**",
   "/greet":      "**{username} greets {arg:everyone}! 👋**",
-  "/salam":      "**{username} says salam{arg:}! ☪️**",
+  "/salam":      "**{username} says salam! ☪️**",
   "/wb":         "**{username} welcomes {arg:you} back! 👋**",
   "/back":       "**{username} is back! 🎉**",
   "/afk":        "**{username} is AFK**",
@@ -167,12 +172,11 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/busy":       "**{username} is busy**",
   "/lag":        "**{username} is lagging!**",
   "/brb":        "**{username} will be right back!**",
-  "/tc":         "**{username} says take care{arg:}! 💖**",
-  "/takecare":   "**{username} says take care{arg:}! 💖**",
+  "/tc":         "**{username} says take care! 💖**",
+  "/takecare":   "**{username} says take care! 💖**",
   "/ty":         "**{username} thanks {arg:you}! 🙏**",
-  "/gl":         "**{username} says good luck{arg:}! 🍀**",
-
-  // AFFECTION / INTERACTION (all auto-fallback "everyone")
+  "/gl":         "**{username} says good luck! 🍀**",
+  // AFFECTION
   "/hug":        "**{username} hugs {arg:everyone}! 🤗**",
   "/cuddle":     "**{username} cuddles {arg:everyone}! 🥰**",
   "/embrace":    "**{username} embraces {arg:everyone}! 🤗**",
@@ -193,12 +197,9 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/bearhug":    "**{username} bearhugs {arg:everyone}! 🐻**",
   "/french":     "**{username} gives {arg:everyone} a French kiss! 💋**",
   "/propose":    "**{username} proposes to {arg:everyone}! 💍**",
-
-  // AGREEMENT / DISAGREEMENT (the user's example!)
+  // EMOTIONS
   "/agree":      "**{username} agrees with {arg:everyone}! 👍**",
   "/disagree":   "**{username} disagrees with {arg:everyone}! 👎**",
-
-  // EMOTIONS
   "/dance":      "**{username} is dancing! 💃**",
   "/cry":        "**{username} is crying! 😭**",
   "/laugh":      "**{username} laughs out loud! 😂**",
@@ -212,7 +213,7 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/happy":      "**{username} is happy! 😊**",
   "/sleep":      "**{username} is sleeping 😴**",
   "/yawn":       "**{username} yawns! 🥱**",
-  "/sorry":      "**{username} says sorry{arg:}! 🙇**",
+  "/sorry":      "**{username} says sorry! 🙇**",
   "/shy":        "**{username} is shy! 😊**",
   "/blush":      "**{username} blushes! 😊**",
   "/flirt":      "**{username} flirts with {arg:everyone}! 😘**",
@@ -233,15 +234,13 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/respect":    "**{username} respects {arg:everyone}! 🫡**",
   "/honor":      "**{username} honors {arg:everyone}! 🏅**",
   "/proud":      "**{username} is proud of {arg:everyone}! 🥹**",
-
-  // FOOD / DRINK
+  // FOOD/DRINK
   "/coffee":     "**{username} drinks some coffee ☕**",
   "/beer":       "**{username} drinks a beer! 🍺**",
   "/cheers":     "**{username} cheers! 🥂**",
   "/chocolate":  "**{username} shares chocolate! 🍫**",
   "/cake":       "**{username} shares cake! 🎂**",
   "/hungry":     "**{username} is hungry! 🍔**",
-
   // TITLES
   "/crown":      "**{username} wears a crown! 👑**",
   "/diamond":    "**{username} shows off a diamond! 💎**",
@@ -252,7 +251,6 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/champion":   "**{username} is the champion! 🏆**",
   "/power":      "**{username} is powerful! 💪**",
   "/worthy":     "**{username} is worthy! ⚔️**",
-
   // SPECIAL
   "/hbd":        "**{username} wishes {arg:you} a happy birthday! 🎂**",
   "/birthday":   "**{username} wishes {arg:you} a happy birthday! 🎂**",
@@ -292,7 +290,6 @@ const DEFAULT_ALL_COMMANDS = [
   "/worthy","/ws","/yawn","/yeah","/yellow","/yingying"
 ];
 
-// Always merge defaults — file can override but can never remove a default
 function loadClientCommands() {
   try {
     if (!fs.existsSync(CLIENT_COMMANDS_FILE)) {
@@ -301,12 +298,11 @@ function loadClientCommands() {
       return;
     }
     const data = JSON.parse(fs.readFileSync(CLIENT_COMMANDS_FILE, "utf8"));
-    // File overrides default — but new defaults for commands not in file still apply
     clientCommands = { ...DEFAULT_CLIENT_COMMANDS, ...data };
-    // Auto-heal: any file template using bare {arg} gets upgraded to {arg:everyone}
+    // Auto-heal: any string template using bare {arg} without fallback → {arg:everyone}
     let healed = 0;
     for (const [k, v] of Object.entries(clientCommands)) {
-      if (/\{arg\}/.test(v) && !/\{arg:[^}]+\}/.test(v)) {
+      if (typeof v === "string" && /\{arg\}/.test(v) && !/\{arg:[^}]+\}/.test(v)) {
         clientCommands[k] = v.replace(/\{arg\}/g, "{arg:everyone}");
         healed++;
       }
@@ -336,37 +332,13 @@ function loadAllCommands() {
   } catch (e) { log(`⚠ load all_commands failed: ${e.message}`); }
 }
 
-/**
- * Render a client-side /command.
- *
- * Placeholders:
- *   {username}         bot's name (e.g. fan)
- *   {arg}              everything after the command — if empty → "everyone"
- *   {arg:fallback}     explicit fallback for {arg} (overrides "everyone")
- *   {args}             same as {arg}
- *   {args:fallback}    same as {arg:fallback}
- *   {roll} {roll:N}    random 1..100 / 1..N (or 1..argN if arg is numeric)
- *   {random} {random:N}  same as roll
- *
- * Returns null if the command isn't in the map (caller falls back to plain text).
- */
-function renderClientCommand(username, text) {
-  if (!text) return null;
-  const trimmed = text.trim();
-  const m = trimmed.match(/^(\/[A-Za-z0-9_]+)(?:\s+([\s\S]+))?$/);
-  if (!m) return null;
-  const cmd = m[1].toLowerCase();
-  const args = (m[2] || "").trim();
-  const template = clientCommands[cmd];
-  if (!template) return null;
-
+// ── Rendering — bulletproof placeholder substitution ──
+function fillTemplate(template, username, args) {
   let rendered = template
     .replace(/\{username\}/g, username)
-    .replace(/\{arg:([^}]+)\}/g, (_, fb) => args || fb)
-    .replace(/\{args:([^}]+)\}/g, (_, fb) => args || fb)
+    .replace(/\{arg:([^}]*)\}/g, (_, fb) => args || fb)
     .replace(/\{arg\}/g, args || "everyone")
     .replace(/\{args\}/g, args || "everyone");
-
   rendered = rendered.replace(/\{roll:(\d+)\}/g, (_, n) => String(1 + Math.floor(Math.random() * Math.max(1, parseInt(n, 10) || 100))));
   if (rendered.includes("{roll}")) {
     const fromArgs = parseInt(args, 10);
@@ -375,15 +347,47 @@ function renderClientCommand(username, text) {
   }
   rendered = rendered.replace(/\{random:(\d+)\}/g, (_, n) => String(1 + Math.floor(Math.random() * Math.max(1, parseInt(n, 10) || 100))));
   rendered = rendered.replace(/\{random\}/g, () => String(1 + Math.floor(Math.random() * 100)));
+  // strip any leftover placeholder — never send broken output
+  return rendered.replace(/\{[a-z]+(?::[^}]*)?\}/gi, "").replace(/\s{2,}/g, " ").trim();
+}
 
-  // Safety: any leftover placeholder gets stripped (never send broken output)
-  rendered = rendered.replace(/\{[a-z]+(?::[^}]*)?\}/gi, "").replace(/\s{2,}/g, " ").trim();
+// Expanded skip list — commands whose "generic verb" form is nonsense
+const GENERIC_SKIP = /^\/(whois|checktag|record|mvsong|poetry\w*|park\w*|unpark|trimmer|bid|challenge|8ball|ball|me|afk|away|online|busy|lag|brb|getmyluck|fortune|roll|sing|thank|thanks)$/;
+function thirdPerson(v) {
+  if (v === "go") return "goes";
+  if (/(s|x|z|ch|sh)$/.test(v)) return v + "es";
+  if (/[^aeiou]y$/.test(v)) return v.slice(0, -1) + "ies";
+  return v + "s";
+}
+const normalizeArgs = (raw) => (raw || "").replace(/(^|\s)@(?=\S)/g, "$1").replace(/\s+/g, " ").trim();
 
-  return rendered;
+function renderSlash(username, text, { generic = SLASH_GENERIC } = {}) {
+  if (!text) return null;
+  const m = text.trim().match(/^(\/[A-Za-z0-9_]+)(?:\s+([\s\S]+))?$/);
+  if (!m) return null;
+  const cmd = m[1].toLowerCase();
+  const args = normalizeArgs(m[2]);
+  let tpl = clientCommands[cmd], isGeneric = false;
+  if (tpl && typeof tpl === "object") tpl = args ? (tpl.with || tpl.bare) : (tpl.bare || tpl.with);
+  if (!tpl) {
+    if (!generic || GENERIC_SKIP.test(cmd)) return null;
+    const v = thirdPerson(cmd.slice(1));
+    tpl = args ? `**{username} ${v} {arg}!**` : `**{username} ${v}!**`;
+    isGeneric = true;
+  }
+  return { body: fillTemplate(tpl, username, args), generic: isGeneric, cmd };
+}
+function renderClientCommand(username, text) { const r = renderSlash(username, text, { generic: false }); return r ? r.body : null; }
+
+function deriveTemplate(text, sender, arg) {
+  const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let t = String(text).trim().replace(new RegExp(esc(sender), "gi"), "\u0001U\u0001");
+  if (arg) t = t.replace(new RegExp(esc(arg), "gi"), "\u0001A\u0001");
+  return t.replace(/\u0001U\u0001/g, "{username}").replace(/\u0001A\u0001/g, "{arg:everyone}");
 }
 
 // ══════════════════════════════════════════════════════════════
-//  FILE HELPERS
+//  SLANG — precompiled regexes (huge perf win)
 // ══════════════════════════════════════════════════════════════
 function loadLines(file) {
   try {
@@ -394,8 +398,23 @@ function loadLines(file) {
 }
 
 let slangWords = [];
-function loadSlang() { slangWords = loadLines(SLANG_FILE).map((w) => w.toLowerCase()); log(`📋 Loaded ${slangWords.length} slang words`); }
-function saveSlang() { try { fs.writeFileSync(SLANG_FILE, slangWords.join("\n"), "utf8"); } catch (e) { log(`slang save: ${e.message}`); } }
+let slangMatchers = [];
+function rebuildSlangMatchers() {
+  slangMatchers = slangWords.map((word) => {
+    const esc = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    try { return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "iu"); }
+    catch { return new RegExp(esc, "i"); }
+  });
+}
+function loadSlang() {
+  slangWords = loadLines(SLANG_FILE).map((w) => w.toLowerCase());
+  rebuildSlangMatchers();
+  log(`📋 Loaded ${slangWords.length} slang words (precompiled)`);
+}
+function saveSlang() {
+  try { fs.writeFileSync(SLANG_FILE, slangWords.join("\n"), "utf8"); rebuildSlangMatchers(); }
+  catch (e) { log(`slang save: ${e.message}`); }
+}
 
 let slangGlobalOn = false;
 const slangRoomOverrides = new Map();
@@ -415,6 +434,9 @@ function addSlangViolation(username, room) {
   return { action, count };
 }
 
+// ══════════════════════════════════════════════════════════════
+//  MISC FILE HELPERS
+// ══════════════════════════════════════════════════════════════
 function loadGiftUsers() { try { if (!fs.existsSync(GIFTUSERS_FILE)) return {}; return JSON.parse(fs.readFileSync(GIFTUSERS_FILE, "utf8")); } catch { return {}; } }
 function saveGiftUsers(u) { try { fs.writeFileSync(GIFTUSERS_FILE, JSON.stringify(u, null, 2), "utf8"); } catch (e) { log(`gift users save: ${e.message}`); } }
 function loadTrigger() { try { return fs.readFileSync(TRIGGER_FILE, "utf8").trim() || TRIGGER_DEFAULT; } catch { return TRIGGER_DEFAULT; } }
@@ -429,9 +451,8 @@ function applyAutoTextDefaults(acc, fallbackRooms = []) {
   for (const r of rooms) acc.autoTextRooms.add(r);
   if (!acc.autoTextRooms.size) { log(`⚠ [${acc.username}] auto-text ON but no rooms`); return; }
   acc.autoTextOn = true;
-  log(`📝 [${acc.username}] auto-text ON (${acc.autoTextMessages.length} msgs, ${acc.autoTextInterval}m, rooms: ${[...acc.autoTextRooms].join(",")})`);
+  log(`📝 [${acc.username}] auto-text ON (${acc.autoTextMessages.length} msgs, ${acc.autoTextInterval}m)`);
 }
-
 function applyAwgiftDefaults(acc, fallbackRooms = []) {
   if (!AWGIFT_ON) return;
   const rooms = AWGIFT_ROOMS.length ? AWGIFT_ROOMS : (fallbackRooms || []);
@@ -440,7 +461,6 @@ function applyAwgiftDefaults(acc, fallbackRooms = []) {
   acc.awgiftOn = true;
   log(`🎁 [${acc.username}] auto-gift ON (gift:"${acc.awgiftName}", cd:${acc.awgiftCooldownHours}h)`);
 }
-
 function extractEntryUser(text, fallbackSender) {
   if (!text) return fallbackSender || null;
   let m = text.match(/:\s*(.+?)\s*\[\d+\]/); if (m) return m[1].trim();
@@ -461,11 +481,10 @@ const HEADERS = {
   "Content-Type": "application/json", Origin: ORIGIN, Referer: ORIGIN + "/",
   "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 };
-
-async function http_(url, { method = "POST", body, headers = {}, form = false } = {}) {
+async function http_(url, { method = "POST", body, headers = {}, form = false, timeoutMs } = {}) {
   const h = { ...HEADERS, ...headers };
   if (form) h["Content-Type"] = "application/x-www-form-urlencoded";
-  const res = await fetchT(url, { method, headers: h, body: body === undefined ? undefined : form ? body : JSON.stringify(body) });
+  const res = await fetchT(url, { method, headers: h, body: body === undefined ? undefined : form ? body : JSON.stringify(body) }, timeoutMs || HTTP_TIMEOUT_MS);
   const text = await res.text();
   let data; try { data = JSON.parse(text); } catch { data = text; }
   if (!res.ok) {
@@ -475,7 +494,6 @@ async function http_(url, { method = "POST", body, headers = {}, form = false } 
   }
   return data;
 }
-
 function getDeviceId() {
   const f = path.join(__dirname, ".deviceid");
   try { return fs.readFileSync(f, "utf8").trim(); } catch {}
@@ -489,29 +507,29 @@ class Session {
     this.username = username; this.password = password;
     this.idToken = null; this.refreshToken = null; this.uid = null; this.exp = 0;
     this.deviceId = getDeviceId(); this.rooms = new Map();
-    this._loginPromise = null;  // ← serialize concurrent logins
   }
-  async login() {
-    if (this._loginPromise) return this._loginPromise;
-    this._loginPromise = (async () => {
+  login() {
+    if (this._loginP) return this._loginP;
+    const email = `${this.username.toLowerCase()}@${EMAIL_DOMAIN}`;
+    this._loginP = (async () => {
+      const r = await http_(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`, {
+        body: { email, password: this.password, returnSecureToken: true, clientType: "CLIENT_TYPE_WEB" },
+      });
+      this.idToken = r.idToken; this.refreshToken = r.refreshToken; this.uid = r.localId;
+      this.exp = Date.now() + Number(r.expiresIn || 3600) * 1000; return this;
+    })().finally(() => { this._loginP = null; });
+    return this._loginP;
+  }
+  refresh() {
+    if (this._refP) return this._refP;
+    this._refP = (async () => {
       try {
-        const email = `${this.username.toLowerCase()}@${EMAIL_DOMAIN}`;
-        const r = await http_(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${API_KEY}`, {
-          body: { email, password: this.password, returnSecureToken: true, clientType: "CLIENT_TYPE_WEB" },
-        });
-        this.idToken = r.idToken; this.refreshToken = r.refreshToken; this.uid = r.localId;
-        this.exp = Date.now() + Number(r.expiresIn || 3600) * 1000;
-        return this;
-      } finally { this._loginPromise = null; }
-    })();
-    return this._loginPromise;
-  }
-  async refresh() {
-    try {
-      const r = await http_(`https://securetoken.googleapis.com/v1/token?key=${API_KEY}`, { form: true, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(this.refreshToken)}` });
-      this.idToken = r.id_token; this.refreshToken = r.refresh_token;
-      this.exp = Date.now() + Number(r.expires_in || 3600) * 1000;
-    } catch { await this.login(); }
+        const r = await http_(`https://securetoken.googleapis.com/v1/token?key=${API_KEY}`, { form: true, body: `grant_type=refresh_token&refresh_token=${encodeURIComponent(this.refreshToken)}` });
+        this.idToken = r.id_token; this.refreshToken = r.refresh_token;
+        this.exp = Date.now() + Number(r.expires_in || 3600) * 1000;
+      } catch { await this.login(); }
+    })().finally(() => { this._refP = null; });
+    return this._refP;
   }
   async token() {
     if (!this.idToken) await this.login();
@@ -555,20 +573,24 @@ const autoId = () => {
 };
 
 async function authed(session, url, opts = {}) {
-  const t = await session.token();
-  try { return await http_(url, { ...opts, headers: { Authorization: `Bearer ${t}` } }); }
-  catch (e) { if (e.status === 401) { await session.login(); return authed(session, url, opts); } throw e; }
+  const attempt = async () => { const t = await session.token(); return http_(url, { ...opts, headers: { Authorization: `Bearer ${t}` }, timeoutMs: opts.timeoutMs || (opts.idempotent ? Math.min(HTTP_TIMEOUT_MS, 10000) : undefined) }); };
+  try { return await attempt(); }
+  catch (e) {
+    if (e.status === 401) { await session.login(); return attempt(); }
+    if (opts.idempotent && (e.code === "TIMEOUT" || /fetch failed|ECONNRESET|ETIMEDOUT|UND_ERR|socket/i.test(e.message || ""))) return attempt();
+    throw e;
+  }
 }
 const commit = (session, writes) => authed(session, `${DOCS}:commit`, { body: { writes } });
 const docName = (p) => `${DB}/documents/${p}`;
 const REQ_TIME = (fieldPath) => ({ fieldPath, setToServerValue: "REQUEST_TIME" });
 
 async function runRootQuery(session, structuredQuery) {
-  const rows = await authed(session, `${DOCS}:runQuery`, { body: { structuredQuery } });
+  const rows = await authed(session, `${DOCS}:runQuery`, { idempotent: true, body: { structuredQuery } });
   return rows.filter((r) => r.document).map((r) => r.document);
 }
 async function runRoomQuery(session, room, structuredQuery) {
-  const rows = await authed(session, `${DOCS}/room_messages/${encodeURIComponent(room)}:runQuery`, { body: { structuredQuery } });
+  const rows = await authed(session, `${DOCS}/room_messages/${encodeURIComponent(room)}:runQuery`, { idempotent: true, body: { structuredQuery } });
   return rows.filter((r) => r.document).map((r) => r.document);
 }
 const latestMessages = (session, room, n = 30) => runRoomQuery(session, room, {
@@ -583,7 +605,7 @@ const newMessages = (session, room, afterIso) => runRoomQuery(session, room, {
   limit: 50,
 });
 async function fetchRoomUsers(session, room, max = 100) {
-  const rows = await authed(session, `${DOCS}/room_presence/${encodeURIComponent(room)}:runQuery`, { body: { structuredQuery: { from: [{ collectionId: "users" }], limit: max } } });
+  const rows = await authed(session, `${DOCS}/room_presence/${encodeURIComponent(room)}:runQuery`, { idempotent: true, body: { structuredQuery: { from: [{ collectionId: "users" }], limit: max } } });
   return rows.filter((r) => r.document).map((r) => decFields(r.document.fields))
     .filter((f) => f && typeof f.username === "string" && f.username).map((f) => f.username);
 }
@@ -608,7 +630,7 @@ async function goOnline(session) {
 const touchActive = (session) => commit(session, [{ update: { name: docName(`users/${session.uid}`) }, updateMask: { fieldPaths: [] }, updateTransforms: [REQ_TIME("lastActiveAt")] }]);
 
 async function joinRoom(session, room, { announce = true } = {}) {
-  const me = await authed(session, `${DOCS}/users/${session.uid}`, { method: "GET" });
+  const me = await authed(session, `${DOCS}/users/${session.uid}`, { method: "GET", idempotent: true });
   const u = decFields(me.fields); const level = u.level ?? 1;
   const visitId = crypto.randomBytes(6).toString("hex");
   const fields = { uid: session.uid, username: session.username, activity: "", level, levelBadgeIcon: u.levelBadgeIcon || "", shopBadges: Array.isArray(u.shopBadges) ? u.shopBadges : [], presenceStatus: "ONLINE", visitId, deviceId: session.deviceId };
@@ -651,19 +673,17 @@ const isNotFound = (e) => e && (e.status === 404 || e.code === "NOT_FOUND" || /n
 const hasAI = () => !!(env.AI_API_KEY || env.MISTRAL_API_KEY);
 
 // ══════════════════════════════════════════════════════════════
-//  ACCOUNT CLASS — fire-and-forget sends, no queue
+//  ACCOUNT
 // ══════════════════════════════════════════════════════════════
 class Account {
   constructor(username, password, { isMain = false, log: lg = log } = {}) {
     this.username = username; this.isMain = isMain; this.log = (m) => lg(`[${username}] ${m}`);
     this.session = new Session(username, password);
-    this.rooms = new Set(); this.hb = null;
+    this.rooms = new Set(); this.q = Promise.resolve(); this.qf = Promise.resolve(); this.hb = null;
     this.onJoin = null; this.onLeave = null;
+    this.queueDepth = 0;
+    this.pendingSends = 0;
     this.warnedCmds = new Set();
-    this.pendingSends = 0;      // ← counter for diagnostics
-    this.lastSendAt = 0;
-    this.lastSendOk = 0;
-    this.lastSendErr = 0;
 
     this.voucherOn = true;
     this.autoReplyOn = AUTO_REPLY_ON;
@@ -709,64 +729,58 @@ class Account {
     this.log(`- left ${room}`); return true;
   }
 
-  // ── send text — FIRE-AND-FORGET. Returns immediately. Never blocks caller. ──
+  // send text; /gift intercepted; client cmds rendered; two lanes
   say(room, text, opts = {}) {
-    if (!this.rooms.has(room)) {
-      return Promise.reject(new Error(`not in room ${room}`));
-    }
+    if (!this.rooms.has(room)) return Promise.reject(new Error(`not in room ${room}`));
 
-    // /gift interception
     if (!opts.raw) {
       const trimmed = text.trim();
       if (/^\/gift\b/i.test(trimmed)) {
         this._sendGiftCommand(room, trimmed.slice(5).trim())
-          .catch((e) => this.log(`⚠ /gift: ${e.message.slice(0, 100)}`));
+          .catch((e) => this.log(`⚠ /gift failed: ${e.message.slice(0, 100)}`));
         return Promise.resolve();
       }
     }
 
-    // render or prefix
     let body, rendered = false;
-    if (opts.raw) { body = text; }
+    if (opts.raw) body = text;
     else {
-      const r = renderClientCommand(this.username, text);
-      if (r) { body = r; rendered = true; }
-      else {
-        // warn once per unknown /command per session
-        const trimmed = text.trim();
-        const cmdMatch = trimmed.match(/^(\/[A-Za-z0-9_]+)\b/);
-        if (cmdMatch && !this.warnedCmds.has(cmdMatch[1].toLowerCase())) {
-          this.warnedCmds.add(cmdMatch[1].toLowerCase());
-          this.log(`⚠ ${cmdMatch[1]} has no template — sending as text`);
-          this.log(`  → Fix: |addcmd ${cmdMatch[1]} **{username} ... {arg:everyone} ...**`);
+      const r = renderSlash(this.username, text);
+      if (r) {
+        body = r.body; rendered = true;
+        if (r.generic && !this.warnedCmds.has(r.cmd)) {
+          this.warnedCmds.add(r.cmd);
+          this.log(`ℹ ${r.cmd}: no exact template — sent generic. Teach: |learn <Room> ${r.cmd} <user>`);
         }
+      } else {
         body = `${this.username}: ${text}`;
+        const m = text.trim().match(/^(\/[A-Za-z0-9_]+)\b/);
+        if (m && !this.warnedCmds.has(m[1].toLowerCase())) {
+          this.warnedCmds.add(m[1].toLowerCase());
+          this.log(`⚠ ${m[1]} has no template — sending as text. Add: |addcmd ${m[1]} **{username} ... {arg:everyone}**`);
+        }
       }
     }
 
-    // fire-and-forget send (caller never waits)
-    this.pendingSends++;
-    this.lastSendAt = Date.now();
-    const sendPromise = withTimeout(
-      sendMessage(this.session, room, body, { type: opts.type || "chat" }),
-      SEND_TIMEOUT_MS,
-      "sendMessage"
-    );
+    const send = () => sendMessage(this.session, room, body, { type: opts.type || "chat" });
+    const lane = opts.fast ? "qf" : "q"; const gap = opts.fast ? FAST_GAP_MS : SEND_GAP_MS;
+    const p = opts.now ? send() : this[lane].then(send);
 
-    sendPromise
-      .then(() => {
-        this.pendingSends--;
-        this.lastSendOk = Date.now();
-        this.log(`→ [${room}] ${body.slice(0, 80)}${rendered ? " (rendered)" : ""}`);
-        if (!opts.now) return sleep(SEND_GAP_MS);
-      })
+    if (!opts.now) {
+      this.queueDepth++;
+      this[lane] = Promise.race([p.catch(() => {}), sleep(SEND_TIMEOUT_MS)]).catch(() => {}).then(() => {
+        this.queueDepth--;
+        return sleep(gap);
+      });
+    }
+    this.pendingSends++;
+    return withTimeout(p, SEND_TIMEOUT_MS, "sendMessage")
+      .then(() => { this.pendingSends--; this.log(`→ [${room}] ${body.slice(0, 80)}${rendered ? " (rendered)" : ""}`); })
       .catch((e) => {
         this.pendingSends--;
-        this.lastSendErr = Date.now();
-        this.log(`⚠ send [${room}]: ${e.message.slice(0, 80)}`);
+        if (e.code === "TIMEOUT") this.log(`⚠ send timeout: "${body.slice(0, 40)}"`);
+        throw e;
       });
-
-    return Promise.resolve();
   }
 
   async _sendGiftCommand(room, args) {
@@ -806,11 +820,7 @@ class Account {
       this.log(`⚙ [${room}] ${fnName}() ✅ ${JSON.stringify(result).slice(0, 100)}`);
       return { mode: "function", result };
     } catch (e) {
-      if (isNotFound(e)) {
-        this.log(`⚠ [${room}] "${fnName}" NOT FOUND — chat fallback`);
-        this.say(room, chatFallback, { raw: false, now: true }).catch(() => {});
-        return { mode: "chat" };
-      }
+      if (isNotFound(e)) { this.log(`⚠ [${room}] "${fnName}" NOT FOUND — chat fallback`); this.say(room, chatFallback, { raw: false, now: true }).catch(() => {}); return { mode: "chat" }; }
       this.log(`✖ [${room}] ${fnName}: ${e.message.slice(0, 120)}`); throw e;
     }
   }
@@ -900,7 +910,8 @@ class Account {
   setGiftInterval(sec) { this.giftInterval = Math.max(1, sec); if (this.giftOn) { if (this.giftTimer) clearTimeout(this.giftTimer); this.giftTimer = null; this.startGift(); } }
 
   reset() {
-    this.pendingSends = 0;
+    this.q = Promise.resolve(); this.qf = Promise.resolve();
+    this.queueDepth = 0; this.pendingSends = 0;
     this.stopFlood(); this.stopGift(); this.stopAutoText();
     if (this.autoTextOn && this.autoTextMessages.length) this.startAutoText();
     if (this.giftOn) this.startGift();
@@ -980,11 +991,10 @@ function extractTargets(arg, mgr) {
 }
 async function onTargets(mgr, fn) {
   const targets = mgr.targets(); if (!targets.length) return "❌ no active accounts";
-  const lines = [];
-  for (const acc of targets) {
-    try { lines.push(`✅ @${acc.username}: ${await withTimeout(fn(acc), CMD_TIMEOUT_MS, "cmd")}`); }
-    catch (e) { lines.push(`❌ @${acc.username}: ${friendlyError(e)}`); }
-  }
+  const lines = await Promise.all(targets.map(async (acc) => {
+    try { return `✅ @${acc.username}: ${await withTimeout(fn(acc), CMD_TIMEOUT_MS, "cmd")}`; }
+    catch (e) { return `❌ @${acc.username}: ${friendlyError(e)}`; }
+  }));
   return lines.join("\n");
 }
 const canonical = (mgr, room) => mgr.allKnownRooms().find((k) => k.toLowerCase() === room.toLowerCase()) || room;
@@ -1012,15 +1022,15 @@ const COMMANDS = {
       return (await acc.leave(room)) ? `left ${room}` : `was not in ${room}`;
     });
   },
+  // |tr is fire-and-forget: parent sees reply in <50ms
   async tr(mgr, arg) {
     if (!arg) return "Usage: |tr <Room> <text>";
     const { room: r0, rest: text } = matchRoom(arg, mgr.allKnownRooms()); if (!text) return "Usage: |tr <Room> <text>";
     const room = canonical(mgr, r0);
-    // fire-and-forget — return immediately
-    for (const acc of mgr.targets()) {
-      acc.say(room, text).catch((e) => acc.log(`say: ${e.message.slice(0, 80)}`));
-    }
-    return `✅ Sent to [${room}] from ${mgr.targets().length} account(s)`;
+    const targets = mgr.targets();
+    if (!targets.length) return "❌ no active accounts";
+    for (const acc of targets) acc.say(room, text, { fast: true }).catch((e) => acc.log(`say: ${e.message.slice(0, 80)}`));
+    return `✅ Sent to [${room}] from ${targets.length} account(s)`;
   },
   async use(mgr, arg) {
     const a = arg.trim().toLowerCase();
@@ -1032,7 +1042,7 @@ const COMMANDS = {
   },
   async who(mgr) {
     const act = new Set(mgr.targets().map((a) => a.username.toLowerCase()));
-    return mgr.list().map((a) => `${act.has(a.username.toLowerCase()) ? "▶" : "•"} @${a.username}${a.isMain ? " (main)" : ""} — ${[...a.rooms].join(", ") || "no rooms"}${a.pendingSends ? ` ⏳${a.pendingSends}` : ""}`).join("\n");
+    return mgr.list().map((a) => `${act.has(a.username.toLowerCase()) ? "▶" : "•"} @${a.username}${a.isMain ? " (main)" : ""} — ${[...a.rooms].join(", ") || "no rooms"} q:${a.queueDepth}⏳${a.pendingSends}`).join("\n");
   },
   async ap(mgr, arg) {
     const ap = mgr.autoPick; const [w, ...rest] = arg.trim().split(/\s+/);
@@ -1048,7 +1058,7 @@ const COMMANDS = {
   },
   async vp(mgr, arg) { return COMMANDS.ap(mgr, arg); },
   async accounts(mgr) {
-    return `👥 (${mgr.list().length}):\n` + mgr.list().map((a) => `  @${a.username}${a.isMain ? " 👑" : ""} ${a.rooms.size ? `[${[...a.rooms].join(",")}]` : "no rooms"}${a.pendingSends ? ` ⏳${a.pendingSends}` : ""}`).join("\n");
+    return `👥 (${mgr.list().length}):\n` + mgr.list().map((a) => `  @${a.username}${a.isMain ? " 👑" : ""} ${a.rooms.size ? `[${[...a.rooms].join(",")}]` : "no rooms"} q:${a.queueDepth}⏳${a.pendingSends}`).join("\n");
   },
   async flood(mgr, arg) {
     if (/^stop$/i.test(arg.trim())) { const lines = mgr.targets().map((a) => { a.stopFlood(); return `🛑 @${a.username}`; }); return lines.join("\n") || "❌ no accounts"; }
@@ -1147,30 +1157,33 @@ const COMMANDS = {
   async settrigger(mgr, arg) { if (!arg.trim()) return "❌ Usage: |settrigger <keyword>"; const keyword = arg.trim().replace(/^@?/, "@"); saveTrigger(keyword); for (const acc of mgr.list()) acc.triggerKeyword = keyword; return `✅ trigger → "${keyword}"`; },
   async checktrigger(mgr) { return `🔔 trigger: "${mgr.main.triggerKeyword || "(none)"}"`; },
   async wip() { const ip = await getPublicIP(); return `🌐 Public IP: \`${ip}\``; },
-  async reset(mgr) { for (const acc of mgr.list()) acc.reset(); return `✅ Reset ${mgr.list().length} account(s)`; },
+  async reset(mgr) { for (const acc of mgr.list()) acc.reset(); return `✅ Reset queues + timers on ${mgr.list().length} account(s)`; },
 
-  // ═══ DIAGNOSTIC ═══
+  // NEW: diagnostic snapshot
   async diag(mgr) {
     const up = Math.round(process.uptime());
     const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
     let msg = `🔍 Diagnostic\n`;
-    msg += `  Uptime   : ${up}s\n`;
-    msg += `  Memory   : ${mem} MB\n`;
-    msg += `  ClientCmds: ${Object.keys(clientCommands).length}/${DEFAULT_ALL_COMMANDS.length}\n`;
-    msg += `  Timeouts : HTTP=${HTTP_TIMEOUT_MS} SEND=${SEND_TIMEOUT_MS} CMD=${CMD_TIMEOUT_MS} GIFT=${GIFT_TIMEOUT_MS}\n`;
+    msg += `  Uptime  : ${up}s\n`;
+    msg += `  Memory  : ${mem} MB\n`;
+    msg += `  Cmds    : ${Object.keys(clientCommands).length}/${DEFAULT_ALL_COMMANDS.length}\n`;
+    msg += `  Timeouts: HTTP=${HTTP_TIMEOUT_MS} SEND=${SEND_TIMEOUT_MS} CMD=${CMD_TIMEOUT_MS} GIFT=${GIFT_TIMEOUT_MS} GAP=${SEND_GAP_MS}/${FAST_GAP_MS}\n`;
+    msg += `  Slang   : ${slangWords.length} words, global=${slangGlobalOn ? "ON" : "OFF"}, overrides=${slangRoomOverrides.size}\n`;
+    msg += `  PM queue: ${pmQueue.length}${pmBusy ? " (working)" : ""}, poll age: ${Math.round((Date.now() - pmLastOkAt) / 1000)}s\n`;
+    msg += `  Rooms   : ${listeners.size}\n`;
+    for (const [r, t] of listeners) msg += `    [${r}] poll age: ${Math.round((Date.now() - t.lastOk) / 1000)}s\n`;
     for (const acc of mgr.list()) {
-      const lastOk = acc.lastSendOk ? `${Math.round((Date.now() - acc.lastSendOk) / 1000)}s ago` : "never";
-      const lastErr = acc.lastSendErr ? `${Math.round((Date.now() - acc.lastSendErr) / 1000)}s ago` : "never";
-      msg += `\n  @${acc.username}${acc.isMain ? " 👑" : ""}\n`;
-      msg += `    Rooms      : ${acc.rooms.size ? [...acc.rooms].join(", ") : "(none)"}\n`;
-      msg += `    Pending    : ${acc.pendingSends}\n`;
-      msg += `    Last OK    : ${lastOk}\n`;
-      msg += `    Last Error : ${lastErr}\n`;
-      msg += `    AutoText   : ${acc.autoTextOn ? `ON (${acc.autoTextRooms.size}r)` : "OFF"}\n`;
-      msg += `    AR         : ${acc.autoReplyOn ? "ON" : "OFF"}\n`;
-      msg += `    AWGIFT     : ${acc.awgiftOn ? `ON (${acc.awgiftRooms.size}r)` : "OFF"}\n`;
+      msg += `\n  @${acc.username}${acc.isMain ? " 👑" : ""} — rooms:${acc.rooms.size} q:${acc.queueDepth}⏳${acc.pendingSends}\n`;
+      msg += `    AT:${acc.autoTextOn ? "ON" : "OFF"} AR:${acc.autoReplyOn ? "ON" : "OFF"} AWGIFT:${acc.awgiftOn ? "ON" : "OFF"} GS:${acc.giftOn ? "ON" : "OFF"}\n`;
     }
     return msg;
+  },
+
+  // NEW: reset templates to defaults
+  async resetcmds() {
+    clientCommands = { ...DEFAULT_CLIENT_COMMANDS };
+    if (!saveClientCommands()) return "❌ save failed";
+    return `✅ client_commands.json reset to ${Object.keys(clientCommands).length} defaults`;
   },
 
   async sd(mgr, arg) {
@@ -1213,11 +1226,6 @@ const COMMANDS = {
     if (!keys.length) return `📭 no client cmds${filter ? ` matching "${filter}"` : ""}`;
     return `📋 ${keys.length} templates${filter ? ` (filter "${filter}")` : ""}:\n` + keys.map((k) => `  ${k}`).join("\n");
   },
-  async resetcmds() {
-    clientCommands = { ...DEFAULT_CLIENT_COMMANDS };
-    if (!saveClientCommands()) return "❌ save failed";
-    return `✅ client_commands.json reset to ${Object.keys(clientCommands).length} defaults`;
-  },
   async missing() {
     const all = loadLines(ALL_COMMANDS_FILE).map((l) => l.toLowerCase()).filter(Boolean);
     if (!all.length) return `⚠ all_commands.txt empty or missing`;
@@ -1227,9 +1235,33 @@ const COMMANDS = {
   },
   async rendercheck(mgr, arg) {
     if (!arg.trim()) return "Usage: |rendercheck /roll [args]";
-    const out = renderClientCommand(mgr.main.username, arg.trim());
-    if (!out) return `❌ "${arg}" not in map.\nAdd: |addcmd ${arg.split(/\s/)[0]} <template>`;
-    return `Would send → ${out}`;
+    const r = renderSlash(mgr.main.username, arg.trim());
+    if (!r) return `❌ "${arg}" is not a /command (or is an info command sent as plain text).`;
+    return `Would send → ${r.body}${r.generic ? `\n(generic — teach exact: |learn <Room> ${r.cmd} <user>)` : ""}`;
+  },
+  async learn(mgr, arg) {
+    const a = (arg || "").trim();
+    if (/^stop$/i.test(a)) { if (!mgr.learn) return "🎓 nothing to stop"; finishLearn(mgr, "🛑 learning cancelled"); return "🛑 cancelled"; }
+    if (!a || /^status$/i.test(a)) {
+      const L = mgr.learn; if (!L) return "🎓 idle. Usage: |learn <Room> [@user] /highfive onik ; /jump";
+      return `🎓 waiting in [${L.room}] for @${L.user} to type: ${L.items.slice(L.i).map((x) => x.cmd + (x.arg ? " " + x.arg : "")).join("  →  ")}`;
+    }
+    const { room: r0, rest } = matchRoom(a, mgr.allKnownRooms());
+    const usage = "Usage: |learn <Room> [@user] /highfive onik ; /jump ; /hug sabuj";
+    if (!r0 || !rest) return usage;
+    const room = canonical(mgr, r0);
+    let who = (mgr.lastPM && mgr.lastPM.from) || PARENTS[0] || ""; let body = rest;
+    const um = body.match(/^@(\S+)\s+/); if (um) { who = um[1]; body = body.slice(um[0].length); }
+    const items = body.split(/\s*;\s*/).map((x) => x.trim()).filter(Boolean).map((x) => {
+      const mm = x.match(/^(\/[A-Za-z0-9_]+)(?:\s+(.+))?$/);
+      return mm ? { cmd: mm[1].toLowerCase(), arg: normalizeArgs(mm[2]) } : null;
+    });
+    if (!items.length || items.some((x) => !x) || !who) return usage;
+    if (mgr.learn) finishLearn(mgr, "♻️ previous learning replaced");
+    mgr.learn = { room, user: who.toLowerCase(), items, i: 0, pm: mgr.lastPM || null, got: [], timer: null };
+    armLearnTimer(mgr);
+    return `🎓 Learning in [${room}]. Now type these in the web as @${who}, in this order:\n` +
+      items.map((x, n) => `  ${n + 1}) ${x.cmd}${x.arg ? " " + x.arg : ""}`).join("\n") + `\n(${Math.round(LEARN_TIMEOUT_MS / 1000)}s between commands; |learn stop to cancel)`;
   },
   async listcmds() { return COMMANDS.cmds({}, ""); },
 
@@ -1247,7 +1279,7 @@ const COMMANDS = {
       "💬 " + `${p}ar on|off  ${p}settrigger <keyword>  ${p}checktrigger`,
       "🎁 " + `${p}vp on|off [Room]  (alias for ${p}ap)`,
       "♻️ " + `${p}reset` + "  — clear stuck queues/timers",
-      "🔍 " + `${p}diag` + "  — full diagnostic (rooms, pending, last ok/err)",
+      "🔍 " + `${p}diag` + "  — full diagnostic snapshot",
       "🌐 " + `${p}wip`,
       "🚫 " + `${p}sd on|off [Room]  ${p}sd reset [Room]  ${p}sd status  ${p}addslang w1,w2  ${p}removeslang w1,w2  ${p}listslang  ${p}viewsh  ${p}clearsh`,
       "",
@@ -1257,7 +1289,8 @@ const COMMANDS = {
       "  " + `${p}addcmd /cmd <template>` + "  — add/update",
       "  " + `${p}delcmd /cmd` + "        — remove",
       "  " + `${p}rendercheck /cmd args` + "  — preview output",
-      "  " + `${p}resetcmds` + "        — reset to defaults",
+      "  " + `${p}resetcmds` + "        — reset templates to defaults",
+      "  " + `${p}learn Room [@user] /cmd target ; /cmd2` + "  — copy the web's exact text",
       "",
       "  Placeholders:",
       "    {username}            bot's name",
@@ -1266,16 +1299,55 @@ const COMMANDS = {
       "    {roll} {roll:N}       random 1..100 / 1..N",
       "    {random} {random:N}   same",
       "",
-      "  Examples (both with AND without arg now work):",
+      "  Examples:",
       "    " + `${p}tr Bangladesh /agree` + "       → **fan agrees with everyone! 👍**",
       "    " + `${p}tr Bangladesh /agree vip` + "   → **fan agrees with vip! 👍**",
       "    " + `${p}tr Bangladesh /roll` + "        → **fan rolls 42**",
-      "    " + `${p}tr Bangladesh /hug` + "         → **fan hugs everyone! 🤗**",
+      "    " + `${p}tr Bangladesh /roll 20` + "     → **fan rolls 14** (1-20)",
       "",
       "💡 Targets: $aa = all sub-accounts, $name = specific account",
     ].join("\n");
   },
 };
+
+// ── |learn engine ──
+function armLearnTimer(mgr) {
+  const L = mgr.learn; if (!L) return;
+  clearTimeout(L.timer);
+  L.timer = setTimeout(() => { if (mgr.learn === L) finishLearn(mgr, `⌛ timed out (${L.got.length}/${L.items.length})`); }, LEARN_TIMEOUT_MS);
+}
+function finishLearn(mgr, msg) {
+  const L = mgr.learn; if (!L) return;
+  clearTimeout(L.timer); mgr.learn = null;
+  const detail = L.got.length ? "\n" + L.got.map((g) => `  ${g.cmd}${g.arg ? " <user>" : ""} → ${g.tpl}`).join("\n") : "";
+  log(`🎓 ${msg}${detail.replace(/\n/g, " | ")}`);
+  if (L.pm && PM_REPLY && typeof sendPM === "function" && main) sendPM(main.session, L.pm, `🎓 ${msg}${detail}`).catch(() => {});
+}
+function learnCapture(mgr, room, sender, f, text) {
+  const L = mgr.learn;
+  if (!L || room.toLowerCase() !== L.room.toLowerCase() || sender.toLowerCase() !== L.user) return false;
+  if (["room_entry", "room_leave", "voucher_drop", "gift"].includes(f.type)) return false;
+  const t = String(text || "").trim();
+  // Only handle rendered-action messages (contain sender name, no "sender: " prefix)
+  const isAction = !t.startsWith(sender + ": ") && t.toLowerCase().includes(L.user);
+  if (!isAction) return false;   // plain chat — let normal handlers run
+  const step = L.items[L.i];
+  if (!step) return true;        // suppress extra actions after done
+  const tpl = deriveTemplate(t, sender, step.arg);
+  const prev = clientCommands[step.cmd];
+  // BUG FIX: string prev becomes {with: prev, bare: prev} so we don't lose the other case
+  let obj;
+  if (prev && typeof prev === "object") obj = { ...prev };
+  else if (typeof prev === "string") obj = { with: prev, bare: prev };
+  else obj = {};
+  if (step.arg) obj.with = tpl; else obj.bare = tpl;
+  clientCommands[step.cmd] = (obj.with && obj.bare) ? obj : (obj.with || obj.bare);
+  saveClientCommands();
+  L.got.push({ cmd: step.cmd, arg: step.arg, tpl }); L.i++;
+  log(`🎓 learned ${step.cmd}${step.arg ? " <user>" : ""} → ${tpl}`);
+  if (L.i >= L.items.length) finishLearn(mgr, `✅ learned ${L.got.length} command(s)`); else armLearnTimer(mgr);
+  return true;
+}
 
 class Controller {
   constructor(manager, { prefix = PARENT_PREFIX } = {}) { this.mgr = manager; this.prefix = prefix; }
@@ -1314,7 +1386,7 @@ class PMClient {
   constructor(session, lg = log) { this.session = session; this.log = lg; this.strategy = null; this.after = new Date().toISOString(); this.seen = new Set(); this.startedAt = Date.now(); }
   _query(strategy) {
     const eq = { fieldFilter: { field: { fieldPath: "toUsername" }, op: "EQUAL", value: { stringValue: this.session.username } } };
-    if (strategy === "A") return { from: [{ collectionId: "private_messages" }], where: { compositeFilter: { op: "AND", filters: [eq, { fieldFilter: { field: { fieldPath: "createdAt" }, op: "GREATER_THAN", value: { timestampValue: this.after } } }] } }, orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }], limit: 50 };
+    if (strategy === "A") return { from: [{ collectionId: "private_messages" }], where: { compositeFilter: { op: "AND", filters: [eq, { fieldFilter: { field: { fieldPath: "createdAt" }, op: "GREATER_THAN", value: { timestampValue: new Date(Math.max(0, Date.parse(this.after) - 3000)).toISOString() } } }] } }, orderBy: [{ field: { fieldPath: "createdAt" }, direction: "ASCENDING" }], limit: 50 };
     return { from: [{ collectionId: "private_messages" }], where: eq, limit: 50 };
   }
   async prime() {
@@ -1330,7 +1402,7 @@ class PMClient {
     if (this.strategy === "B") docs = await runRootQuery(this.session, this._query("B"));
     const out = [];
     for (const d of docs) {
-      const m = normalizePM(d); if (this.seen.has(m.id)) continue; this.seen.add(m.id);
+      const m = normalizePM(d); if (this.seen.has(m.id)) continue; this.seen.add(m.id); if (this.seen.size > 5000) this.seen = new Set([...this.seen].slice(-2500));
       if (m.createdAt && Date.parse(m.createdAt) > Date.parse(this.after)) this.after = m.createdAt;
       if (this.strategy === "B" && m.createdAt && Date.parse(m.createdAt) < this.startedAt - 60_000) continue;
       out.push(m);
@@ -1400,15 +1472,16 @@ async function handleRoomMessage(room, sender, body) {
 }
 function roomSlangOn(room) { const key = room.toLowerCase(); return slangRoomOverrides.has(key) ? slangRoomOverrides.get(key) : slangGlobalOn; }
 
-// checkSlang now returns immediately — enforcement fires in background
+// FIX: detection stays sync, enforcement is fire-and-forget — returns in <1ms
 async function checkSlang(room, sender, text) {
-  if (!slangWords.length || !roomSlangOn(room)) return false;
+  if (!slangMatchers.length || !roomSlangOn(room)) return false;
   const lower = text.toLowerCase();
-  const hit = slangWords.find((word) => { const esc = word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); try { return new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, "iu").test(lower); } catch { return lower.includes(word); } });
+  let hit = null;
+  for (let i = 0; i < slangMatchers.length; i++) { if (slangMatchers[i].test(lower)) { hit = slangWords[i]; break; } }
   if (!hit) return false;
-  main.log(`🚫 slang @${sender} [${room}]: "${text.slice(0, 60)}"`);
+  main.log(`🚫 slang @${sender} [${room}]: "${text.slice(0, 60)}" (${hit})`);
   const { action, count } = addSlangViolation(sender, room);
-  // fire-and-forget enforcement
+  // fire and forget — never blocks anything
   if (action === "bump") {
     main.cmd(room, FN_BUMP, { roomId: room, targetUsername: sender }, `/bump ${sender}`).catch(() => {});
     main.say(room, `🚫 @${sender} bumped.`).catch(() => {});
@@ -1420,15 +1493,13 @@ async function checkSlang(room, sender, text) {
   return true;
 }
 
-// tryAutoReply is now fire-and-forget too
-function tryAutoReply(room, sender, text) {
+async function tryAutoReply(room, sender, text) {
   if (!main.autoReplyOn) return;
   const kw = (main.triggerKeyword || "").toLowerCase(); if (!kw || !text.toLowerCase().includes(kw)) return;
   if (!hasAI()) return;
   const q = text.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "").trim() || text;
-  askAI(q).then((reply) => main.say(room, `@${sender} ${reply}`)).catch(() => {});
+  const reply = await askAI(q); main.say(room, `@${sender} ${reply}`).catch(() => {});
 }
-
 function handleJoin(room, who, uid = null) {
   if (!who || who.toLowerCase() === USER.toLowerCase()) return;
   if (main.awOn) {
@@ -1449,7 +1520,6 @@ function handleJoin(room, who, uid = null) {
     const payload = { roomId: room, target: who, giftName: acc.awgiftName };
     if (acc.awgiftMessage) payload.message = acc.awgiftMessage;
     if (AWGIFT_POST_LINE) payload.postRoomLine = true;
-    // fire and forget
     acc.cmd(room, FN_GIFT, payload, `/gift ${who} ${acc.awgiftName} -m ${acc.awgiftMessage}`)
       .then(({ mode, result }) => {
         users[key] = Date.now(); saveGiftUsers(users);
@@ -1458,7 +1528,6 @@ function handleJoin(room, who, uid = null) {
       .catch((e) => acc.log(`awgift @${who}: ${e.message.slice(0, 100)}`));
   }
 }
-
 function parseVoucher(f) {
   const text = String(f.text || ""); const fromSystem = f.type === "voucher_drop" || !f.senderUid;
   if (!fromSystem) return null;
@@ -1491,15 +1560,17 @@ function processMsg(room, doc) {
   let sender = docSender; if (!sender) { const m = text.match(/^([^:]+):/); if (m) sender = m[1]; }
   if (!sender) return;
   lastRoomMsgAt = Date.now();
+  if (manager.learn && learnCapture(manager, room, sender, f, text)) return;
   const isManaged = (f.senderUid && f.senderUid === main.session.uid) || sender.toLowerCase() === USER.toLowerCase() || manager.get(sender) !== undefined;
   if (f.type === "voucher_drop" || parseVoucher(f)) { autoPickVoucher(main, manager, room, f); return; }
   if (f.type === "room_entry") { if (isManaged) return; const eu = extractEntryUser(text, docSender); if (eu) handleJoin(room, eu, f.senderUid || null); return; }
   if (f.type !== "chat" || isManaged) return;
   const body = text.startsWith(sender + ": ") ? text.slice(sender.length + 2) : text;
-  // fire-and-forget everything — processMsg never blocks
-  checkSlang(room, sender, body).catch(() => {});
-  tryAutoReply(room, sender, body);
-  handleRoomMessage(room, sender, body).catch(() => {});
+  (async () => {
+    const hit = await checkSlang(room, sender, body).catch(() => false);
+    if (hit) return;
+    await Promise.allSettled([tryAutoReply(room, sender, body), handleRoomMessage(room, sender, body)]);
+  })().catch((e) => log("msg handler:", e.message.slice(0, 100)));
 }
 
 async function initRoom(room) {
@@ -1509,14 +1580,33 @@ async function initRoom(room) {
   if (latest[0]) { const c = decFields(latest[0].fields).createdAt; if (c) st.after = c; }
   roomState.set(room, st);
 }
+
 function startListening(room) {
-  if (listeners.has(room)) return; const tok = { stop: false }; listeners.set(room, tok);
+  if (listeners.has(room)) return;
+  const tok = { stop: false, lastOk: Date.now() }; listeners.set(room, tok);
   (async () => {
-    try { await initRoom(room); log(`✔ [${room}] listening`); } catch (e) { log(`✖ [${room}] read fail`); listeners.delete(room); return; }
+    // init retry cap: 10 attempts × 25s = ~4 min before giving up on this room
+    let initTries = 0;
+    while (!tok.stop && !roomState.has(room) && initTries < 10) {
+      initTries++;
+      try { await withTimeout(initRoom(room), 25000, "init"); log(`✔ [${room}] listening`); }
+      catch (e) {
+        log(`✖ [${room}] init ${initTries}/10 failed (${e.message.slice(0, 60)}) — retrying`);
+        await sleep(3000);
+      }
+    }
+    if (!roomState.has(room)) { log(`✖ [${room}] gave up after 10 attempts`); listeners.delete(room); return; }
+
     let errors = 0;
     while (!tok.stop) {
-      try { const docs = await newMessages(main.session, room, roomState.get(room).after); docs.forEach((d) => processMsg(room, d)); errors = 0; await sleep(POLL_MS); }
-      catch { errors++; await sleep(Math.min(20000, 1000 * errors)); }
+      try {
+        const st = roomState.get(room); if (!st) break;
+        const after = new Date(Math.max(0, Date.parse(st.after) - 3000)).toISOString();
+        const docs = await withTimeout(newMessages(main.session, room, after), 25000, "poll");
+        if (tok.stop) break;
+        docs.forEach((d) => processMsg(room, d));
+        errors = 0; tok.lastOk = Date.now(); await sleep(POLL_MS);
+      } catch { errors++; await sleep(Math.min(3000, 500 * errors)); }
     }
   })();
 }
@@ -1527,6 +1617,7 @@ async function handlePM(m) {
   const from = m.from.toLowerCase(); if (!PARENTS.includes(from)) return;
   const uid = parentUids.get(from); if (uid && m.fromUid && m.fromUid !== uid) return;
   lastPMAt = Date.now();
+  manager.lastPM = m;
   const reply = await controller.handle(m.text);
   if (reply !== null) {
     const cmdName = (m.text || "").trim().split(/\s+/)[0];
@@ -1540,23 +1631,57 @@ async function handlePM(m) {
   if (kw && text.toLowerCase().includes(kw) && hasAI()) { const q = text.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "").trim() || text; const ai = await askAI(q); if (PM_REPLY) await sendPM(main.session, m, ai).catch(() => {}); }
 }
 
-// PM loop: withTimeout on poll, fire-and-forget handlePM
+// PM commands serialized (they share state), polling never blocks
+let pmClient = null, pmGen = 0, pmLastOkAt = Date.now(), pmBusy = false;
+const pmQueue = [];
+async function pmWorker() {
+  if (pmBusy) return; pmBusy = true;
+  try {
+    while (pmQueue.length) {
+      const m = pmQueue.shift();
+      await withTimeout(handlePM(m), CMD_TIMEOUT_MS + 15000, "pm-command").catch((e) => log("PM handler:", e.message.slice(0, 100)));
+    }
+  } finally { pmBusy = false; }
+}
 async function pmLoop() {
-  const pm = new PMClient(main.session); await pm.prime();
-  log(`✔ PM control active — parents: ${PARENTS.join(", ")}`);
+  const gen = ++pmGen;
+  if (!pmClient) { pmClient = new PMClient(main.session); await pmClient.prime(); log(`✔ PM control active — parents: ${PARENTS.join(", ")}`); }
   let errors = 0;
-  for (;;) {
+  while (gen === pmGen) {
     try {
-      const msgs = await withTimeout(pm.poll(), 20000, "pm-poll");
-      for (const m of msgs) handlePM(m).catch((e) => log("PM handler:", e.message.slice(0, 100)));
+      const msgs = await withTimeout(pmClient.poll(), 20000, "pm-poll");
+      pmLastOkAt = Date.now();
+      if (gen !== pmGen) break;
+      for (const m of msgs) pmQueue.push(m);
+      if (msgs.length) pmWorker();
       errors = 0; await sleep(PM_POLL_MS);
     } catch (e) {
       errors++;
       if (errors === 1 || errors % 10 === 0) log(`⚠ PM poll: ${e.message.slice(0, 160)}`);
-      await sleep(Math.min(20000, 1000 * errors));
+      await sleep(Math.min(3000, 500 * errors));
     }
   }
 }
+
+// Watchdog: FIX — deletes roomState so restart re-initializes cleanly
+function startWatchdog() {
+  setInterval(() => {
+    const now = Date.now();
+    for (const [room, tok] of [...listeners]) {
+      if (now - tok.lastOk > STALL_MS) {
+        log(`⚠ [${room}] silent ${Math.round((now - tok.lastOk) / 1000)}s — restarting`);
+        tok.stop = true; listeners.delete(room); roomState.delete(room); startListening(room);
+      }
+    }
+    if (PARENTS.length && pmClient && now - pmLastOkAt > STALL_MS) {
+      log("⚠ PM poll silent — restarting it");
+      pmLastOkAt = now; pmLoop();
+    }
+  }, 10000).unref?.();
+}
+
+process.on("unhandledRejection", (r) => log("⚠ unhandledRejection:", String((r && r.message) || r).slice(0, 160)));
+process.on("uncaughtException", (e) => log("⚠ uncaughtException:", String((e && e.stack) || e).slice(0, 300)));
 
 function startHealthServer() {
   if (!PORT && env.HEALTH_SERVER !== "true") return;
@@ -1567,10 +1692,11 @@ function startHealthServer() {
 function startHeartbeat() {
   setInterval(() => {
     const up = Math.round(process.uptime());
-    const accounts = manager.list().map((a) => `@${a.username}${a.rooms.size ? `[${a.rooms.size}r]` : ""}${a.pendingSends ? ` ⏳${a.pendingSends}` : ""}`).join(" ");
+    const accounts = manager.list().map((a) => `@${a.username}${a.rooms.size ? `[${a.rooms.size}r]` : ""}${a.queueDepth ? ` q:${a.queueDepth}` : ""}${a.pendingSends ? ` ⏳${a.pendingSends}` : ""}`).join(" ");
     const lastPM = lastPMAt ? `${Math.round((Date.now() - lastPMAt) / 1000)}s ago` : "never";
     const lastMsg = lastRoomMsgAt ? `${Math.round((Date.now() - lastRoomMsgAt) / 1000)}s ago` : "never";
-    log(`❤️ alive uptime=${up}s rooms=${main?.rooms.size || 0} accounts=${accounts} lastPM=${lastPM} lastMsg=${lastMsg}`);
+    const pollAge = [...listeners].map(([r, t]) => `${r}:${Math.round((Date.now() - t.lastOk) / 1000)}s`).join(" ");
+    log(`❤️ alive uptime=${up}s rooms=${main?.rooms.size || 0} accounts=${accounts} lastPM=${lastPM} lastMsg=${lastMsg} poll[${pollAge}] pmQ=${pmQueue.length}`);
   }, HEARTBEAT_MS).unref?.();
 }
 
@@ -1586,7 +1712,7 @@ async function startBot() {
   manager = new Manager(main); controller = new Controller(manager);
   main.onJoin = startListening; main.onLeave = stopListening;
 
-  startHealthServer(); startHeartbeat();
+  startHealthServer(); startHeartbeat(); startWatchdog();
   log(`Logging in as ${USER}...`);
   await main.start();
 
@@ -1600,8 +1726,8 @@ async function startBot() {
   const known = Object.keys(clientCommands).length;
   const total = DEFAULT_ALL_COMMANDS.length;
   log(`Bot running. Auto-pick=${manager.autoPick.global ? "ON" : "OFF"} Auto-text=${main.autoTextOn ? "ON" : "OFF"} Auto-reply=${main.autoReplyOn ? "ON" : "OFF"} Awgift=${main.awgiftOn ? "ON" : "OFF"} ClientCmds=${known}/${total}.`);
-  log(`Fire-and-forget mode: no queue, no stuck. SEND_GAP=${SEND_GAP_MS}ms HTTP=${HTTP_TIMEOUT_MS}ms SEND=${SEND_TIMEOUT_MS}ms CMD=${CMD_TIMEOUT_MS}ms.`);
-  log(`Diagnostics: |diag |resetcmds. If stuck: |reset`);
+  log(`Timeouts: HTTP=${HTTP_TIMEOUT_MS}ms SEND=${SEND_TIMEOUT_MS}ms CMD=${CMD_TIMEOUT_MS}ms GIFT=${GIFT_TIMEOUT_MS}ms GAP=${SEND_GAP_MS}/${FAST_GAP_MS}ms STALL=${STALL_MS}ms`);
+  log(`Diag: |diag. Reset: |reset |resetcmds`);
   process.on("SIGINT", async () => { log("Shutting down..."); await manager.stopAll(); process.exit(0); });
 }
 
@@ -1613,5 +1739,6 @@ if (require.main === module) {
 module.exports = {
   Session, Account, Manager, Controller, matchRoom, buildReplyFields, normalizePM,
   parseVoucher, autoPickVoucher, callFunction, applyAutoTextDefaults, applyAwgiftDefaults,
-  extractEntryUser, renderClientCommand, fetchRoomUsers, fetchT, withTimeout, enc, decFields,
+  extractEntryUser, renderClientCommand, renderSlash, deriveTemplate, learnCapture, finishLearn, fillTemplate,
+  fetchRoomUsers, fetchT, withTimeout, enc, decFields,
 };
