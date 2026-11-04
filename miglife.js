@@ -1,7 +1,10 @@
 /**
- * miglife.js — single-file miglife bot v6.1
- * Fixes: slang blocking, regex caching, watchdog state, |tr speed, learn string→object,
- *        GENERIC_SKIP expanded, +|diag +|resetcmds, timer cleanup
+ * miglife.js — single-file miglife bot v6.2
+ * + |status (comprehensive status snapshot)
+ * + |help long replies auto-split into multiple PMs (MAX_PM_LEN)
+ * + all prior fixes (slang fire-and-forget, regex cache, watchdog state,
+ *   |tr fast path, learn string→object, GENERIC_SKIP, |diag, |resetcmds,
+ *   single-flight auth, two-lane queues, PM worker, watchdog for PM)
  */
 "use strict";
 
@@ -52,6 +55,7 @@ const SEND_TIMEOUT_MS = Number(env.SEND_TIMEOUT_MS || 20000);
 const CMD_TIMEOUT_MS  = Number(env.CMD_TIMEOUT_MS  || 30000);
 const GIFT_TIMEOUT_MS = Number(env.GIFT_TIMEOUT_MS || 30000);
 const HEARTBEAT_MS    = Number(env.HEARTBEAT_MS    || 300000);
+const MAX_PM_LEN      = Number(env.MAX_PM_LEN      || 1200);
 
 const AUTO_PICK = env.AUTO_PICK === "true";
 const AUTO_TEXT_ON = env.AUTO_TEXT_ON === "true";
@@ -103,7 +107,7 @@ const LEARN_TIMEOUT_MS = Number(env.LEARN_TIMEOUT_MS || 120000);
 const SLASH_GENERIC = env.SLASH_GENERIC !== "false";
 
 // ══════════════════════════════════════════════════════════════
-//  HANG PREVENTION  (timer always cleaned up + unref'd)
+//  HANG PREVENTION
 // ══════════════════════════════════════════════════════════════
 async function fetchT(url, opts = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   const ctrl = new AbortController();
@@ -123,8 +127,6 @@ async function fetchT(url, opts = {}, timeoutMs = HTTP_TIMEOUT_MS) {
   }
   return res;
 }
-
-// Promise.race with proper timer cleanup (both branches) + unref
 function withTimeout(promise, ms, label = "op") {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -144,13 +146,11 @@ function withTimeout(promise, ms, label = "op") {
 //  CLIENT-SIDE COMMANDS
 // ══════════════════════════════════════════════════════════════
 const DEFAULT_CLIENT_COMMANDS = {
-  // CONFIRMED
   "/roll":       "**{username} rolls {roll}**",
   "/thank":      "**{username} thanks everyone! 🙏**",
   "/thanks":     "**{username} thanks everyone! 🙏**",
   "/sing":       "**{username} is singing a happy song, \"Wake up, shake up, it's a brand new day!\" 🎵**",
   "/boo":        "**{username} jumps out and boos everyone! 👻**",
-  // GREETINGS
   "/hi":         "**{username} says hi! 👋**",
   "/hello":      "**{username} says hello! 👋**",
   "/bye":        "**{username} waves goodbye! 👋**",
@@ -176,7 +176,6 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/takecare":   "**{username} says take care! 💖**",
   "/ty":         "**{username} thanks {arg:you}! 🙏**",
   "/gl":         "**{username} says good luck! 🍀**",
-  // AFFECTION
   "/hug":        "**{username} hugs {arg:everyone}! 🤗**",
   "/cuddle":     "**{username} cuddles {arg:everyone}! 🥰**",
   "/embrace":    "**{username} embraces {arg:everyone}! 🤗**",
@@ -197,7 +196,6 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/bearhug":    "**{username} bearhugs {arg:everyone}! 🐻**",
   "/french":     "**{username} gives {arg:everyone} a French kiss! 💋**",
   "/propose":    "**{username} proposes to {arg:everyone}! 💍**",
-  // EMOTIONS
   "/agree":      "**{username} agrees with {arg:everyone}! 👍**",
   "/disagree":   "**{username} disagrees with {arg:everyone}! 👎**",
   "/dance":      "**{username} is dancing! 💃**",
@@ -234,14 +232,12 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/respect":    "**{username} respects {arg:everyone}! 🫡**",
   "/honor":      "**{username} honors {arg:everyone}! 🏅**",
   "/proud":      "**{username} is proud of {arg:everyone}! 🥹**",
-  // FOOD/DRINK
   "/coffee":     "**{username} drinks some coffee ☕**",
   "/beer":       "**{username} drinks a beer! 🍺**",
   "/cheers":     "**{username} cheers! 🥂**",
   "/chocolate":  "**{username} shares chocolate! 🍫**",
   "/cake":       "**{username} shares cake! 🎂**",
   "/hungry":     "**{username} is hungry! 🍔**",
-  // TITLES
   "/crown":      "**{username} wears a crown! 👑**",
   "/diamond":    "**{username} shows off a diamond! 💎**",
   "/gold":       "**{username} has gold! 🥇**",
@@ -251,7 +247,6 @@ const DEFAULT_CLIENT_COMMANDS = {
   "/champion":   "**{username} is the champion! 🏆**",
   "/power":      "**{username} is powerful! 💪**",
   "/worthy":     "**{username} is worthy! ⚔️**",
-  // SPECIAL
   "/hbd":        "**{username} wishes {arg:you} a happy birthday! 🎂**",
   "/birthday":   "**{username} wishes {arg:you} a happy birthday! 🎂**",
   "/eid":        "**{username} wishes {arg:everyone} Eid Mubarak! 🌙**",
@@ -299,7 +294,6 @@ function loadClientCommands() {
     }
     const data = JSON.parse(fs.readFileSync(CLIENT_COMMANDS_FILE, "utf8"));
     clientCommands = { ...DEFAULT_CLIENT_COMMANDS, ...data };
-    // Auto-heal: any string template using bare {arg} without fallback → {arg:everyone}
     let healed = 0;
     for (const [k, v] of Object.entries(clientCommands)) {
       if (typeof v === "string" && /\{arg\}/.test(v) && !/\{arg:[^}]+\}/.test(v)) {
@@ -314,12 +308,10 @@ function loadClientCommands() {
     log(`📝 Loaded ${Object.keys(clientCommands).length} client-side templates`);
   } catch (e) { log(`⚠ load client_commands failed: ${e.message}`); }
 }
-
 function saveClientCommands() {
   try { fs.writeFileSync(CLIENT_COMMANDS_FILE, JSON.stringify(clientCommands, null, 2), "utf8"); return true; }
   catch (e) { log(`⚠ save client_commands failed: ${e.message}`); return false; }
 }
-
 function loadAllCommands() {
   try {
     if (!fs.existsSync(ALL_COMMANDS_FILE)) {
@@ -332,7 +324,6 @@ function loadAllCommands() {
   } catch (e) { log(`⚠ load all_commands failed: ${e.message}`); }
 }
 
-// ── Rendering — bulletproof placeholder substitution ──
 function fillTemplate(template, username, args) {
   let rendered = template
     .replace(/\{username\}/g, username)
@@ -347,11 +338,9 @@ function fillTemplate(template, username, args) {
   }
   rendered = rendered.replace(/\{random:(\d+)\}/g, (_, n) => String(1 + Math.floor(Math.random() * Math.max(1, parseInt(n, 10) || 100))));
   rendered = rendered.replace(/\{random\}/g, () => String(1 + Math.floor(Math.random() * 100)));
-  // strip any leftover placeholder — never send broken output
   return rendered.replace(/\{[a-z]+(?::[^}]*)?\}/gi, "").replace(/\s{2,}/g, " ").trim();
 }
 
-// Expanded skip list — commands whose "generic verb" form is nonsense
 const GENERIC_SKIP = /^\/(whois|checktag|record|mvsong|poetry\w*|park\w*|unpark|trimmer|bid|challenge|8ball|ball|me|afk|away|online|busy|lag|brb|getmyluck|fortune|roll|sing|thank|thanks)$/;
 function thirdPerson(v) {
   if (v === "go") return "goes";
@@ -378,7 +367,6 @@ function renderSlash(username, text, { generic = SLASH_GENERIC } = {}) {
   return { body: fillTemplate(tpl, username, args), generic: isGeneric, cmd };
 }
 function renderClientCommand(username, text) { const r = renderSlash(username, text, { generic: false }); return r ? r.body : null; }
-
 function deriveTemplate(text, sender, arg) {
   const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let t = String(text).trim().replace(new RegExp(esc(sender), "gi"), "\u0001U\u0001");
@@ -387,7 +375,7 @@ function deriveTemplate(text, sender, arg) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  SLANG — precompiled regexes (huge perf win)
+//  SLANG (precompiled regexes)
 // ══════════════════════════════════════════════════════════════
 function loadLines(file) {
   try {
@@ -396,7 +384,6 @@ function loadLines(file) {
     return fs.readFileSync(p, "utf8").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
   } catch (e) { log(`[${file}] load error: ${e.message}`); return []; }
 }
-
 let slangWords = [];
 let slangMatchers = [];
 function rebuildSlangMatchers() {
@@ -418,7 +405,6 @@ function saveSlang() {
 
 let slangGlobalOn = false;
 const slangRoomOverrides = new Map();
-
 function loadSlangHistory() { try { if (!fs.existsSync(SLANG_HISTORY_FILE)) return {}; return JSON.parse(fs.readFileSync(SLANG_HISTORY_FILE, "utf8")); } catch { return {}; } }
 function saveSlangHistory(h) { try { fs.writeFileSync(SLANG_HISTORY_FILE, JSON.stringify(h, null, 2), "utf8"); } catch (e) { log(`slang history save: ${e.message}`); } }
 function addSlangViolation(username, room) {
@@ -435,7 +421,7 @@ function addSlangViolation(username, room) {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  MISC FILE HELPERS
+//  MISC HELPERS
 // ══════════════════════════════════════════════════════════════
 function loadGiftUsers() { try { if (!fs.existsSync(GIFTUSERS_FILE)) return {}; return JSON.parse(fs.readFileSync(GIFTUSERS_FILE, "utf8")); } catch { return {}; } }
 function saveGiftUsers(u) { try { fs.writeFileSync(GIFTUSERS_FILE, JSON.stringify(u, null, 2), "utf8"); } catch (e) { log(`gift users save: ${e.message}`); } }
@@ -467,7 +453,6 @@ function extractEntryUser(text, fallbackSender) {
   m = text.match(/:\s*(.+?)\s+has\s+entered/i); if (m) return m[1].trim();
   return fallbackSender || null;
 }
-
 let cachedIP = null;
 async function getPublicIP() {
   if (cachedIP) return cachedIP;
@@ -566,12 +551,10 @@ function dec(v) {
   return v;
 }
 const decFields = (f = {}) => Object.fromEntries(Object.entries(f).map(([k, v]) => [k, dec(v)]));
-
 const autoId = () => {
   const c = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
   return Array.from({ length: 20 }, () => c[crypto.randomInt(c.length)]).join("");
 };
-
 async function authed(session, url, opts = {}) {
   const attempt = async () => { const t = await session.token(); return http_(url, { ...opts, headers: { Authorization: `Bearer ${t}` }, timeoutMs: opts.timeoutMs || (opts.idempotent ? Math.min(HTTP_TIMEOUT_MS, 10000) : undefined) }); };
   try { return await attempt(); }
@@ -684,6 +667,7 @@ class Account {
     this.queueDepth = 0;
     this.pendingSends = 0;
     this.warnedCmds = new Set();
+    this.level = null;
 
     this.voucherOn = true;
     this.autoReplyOn = AUTO_REPLY_ON;
@@ -717,7 +701,8 @@ class Account {
   async join(room) {
     if (this.rooms.has(room)) return { already: true };
     const r = await joinRoom(this.session, room, { announce: ANNOUNCE_JOIN });
-    this.rooms.add(room); this.log(`+ joined ${room} (level ${r.level})`);
+    this.rooms.add(room); this.level = r.level;
+    this.log(`+ joined ${room} (level ${r.level})`);
     if (this.onJoin) this.onJoin(room);
     if (this.autoTextOn && this.autoTextRooms.has(room)) this.startAutoText();
     return r;
@@ -729,10 +714,8 @@ class Account {
     this.log(`- left ${room}`); return true;
   }
 
-  // send text; /gift intercepted; client cmds rendered; two lanes
   say(room, text, opts = {}) {
     if (!this.rooms.has(room)) return Promise.reject(new Error(`not in room ${room}`));
-
     if (!opts.raw) {
       const trimmed = text.trim();
       if (/^\/gift\b/i.test(trimmed)) {
@@ -741,7 +724,6 @@ class Account {
         return Promise.resolve();
       }
     }
-
     let body, rendered = false;
     if (opts.raw) body = text;
     else {
@@ -761,11 +743,9 @@ class Account {
         }
       }
     }
-
     const send = () => sendMessage(this.session, room, body, { type: opts.type || "chat" });
     const lane = opts.fast ? "qf" : "q"; const gap = opts.fast ? FAST_GAP_MS : SEND_GAP_MS;
     const p = opts.now ? send() : this[lane].then(send);
-
     if (!opts.now) {
       this.queueDepth++;
       this[lane] = Promise.race([p.catch(() => {}), sleep(SEND_TIMEOUT_MS)]).catch(() => {}).then(() => {
@@ -789,7 +769,6 @@ class Account {
     const msgIdx = parts.indexOf("-m");
     const message = msgIdx >= 0 ? parts.slice(msgIdx + 1).join(" ").trim() : "";
     const head = msgIdx >= 0 ? parts.slice(0, msgIdx) : parts;
-
     if (head[0] && head[0].toLowerCase() === "all") {
       const giftName = head[1];
       if (!giftName) { this.log(`⚠ /gift all missing giftName`); return; }
@@ -927,6 +906,8 @@ class Manager {
     this.accounts = new Map([[main.username.toLowerCase(), main]]);
     this.active = "main"; this.knownRooms = new Set();
     this.autoPick = { global: AUTO_PICK, rooms: new Map(), sent: 0 };
+    this.learn = null;
+    this.lastPM = null;
   }
   get(u) { return this.accounts.get((u || "").toLowerCase()); }
   list() { return [...this.accounts.values()]; }
@@ -957,7 +938,7 @@ class Manager {
 }
 
 // ══════════════════════════════════════════════════════════════
-//  COMMANDS
+//  HELPERS FOR COMMANDS
 // ══════════════════════════════════════════════════════════════
 function splitFirst(s) { const i = s.search(/\s/); return i < 0 ? [s, ""] : [s.slice(0, i), s.slice(i).trim()]; }
 function matchRoom(input, known) {
@@ -998,7 +979,12 @@ async function onTargets(mgr, fn) {
   return lines.join("\n");
 }
 const canonical = (mgr, room) => mgr.allKnownRooms().find((k) => k.toLowerCase() === room.toLowerCase()) || room;
+function fmtAgo(ms) { if (!ms) return "never"; const s = Math.round((Date.now() - ms) / 1000); return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`; }
+function fmtDuration(sec) { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; }
 
+// ══════════════════════════════════════════════════════════════
+//  COMMANDS
+// ══════════════════════════════════════════════════════════════
 const COMMANDS = {
   async lnu(mgr, arg) {
     const i = arg.indexOf(":"); if (i < 1 || i === arg.length - 1) return "Usage: |lnu username:password";
@@ -1022,7 +1008,6 @@ const COMMANDS = {
       return (await acc.leave(room)) ? `left ${room}` : `was not in ${room}`;
     });
   },
-  // |tr is fire-and-forget: parent sees reply in <50ms
   async tr(mgr, arg) {
     if (!arg) return "Usage: |tr <Room> <text>";
     const { room: r0, rest: text } = matchRoom(arg, mgr.allKnownRooms()); if (!text) return "Usage: |tr <Room> <text>";
@@ -1159,19 +1144,116 @@ const COMMANDS = {
   async wip() { const ip = await getPublicIP(); return `🌐 Public IP: \`${ip}\``; },
   async reset(mgr) { for (const acc of mgr.list()) acc.reset(); return `✅ Reset queues + timers on ${mgr.list().length} account(s)`; },
 
-  // NEW: diagnostic snapshot
+  // ═══ NEW: |status ═══
+  async status(mgr) {
+    const up = Math.round(process.uptime());
+    const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    const now = Date.now();
+    const lines = [];
+
+    lines.push(`🤖 **miglife bot v6.2 — status**`);
+    lines.push(`⏱ Uptime: ${fmtDuration(up)} · 💾 ${mem} MB · 📍 PID ${process.pid}`);
+    lines.push("");
+
+    // ── ACCOUNTS ──
+    lines.push(`📦 **Accounts** (${mgr.list().length}/${MAX_ACCOUNTS})`);
+    for (const acc of mgr.list()) {
+      const tag = acc.isMain ? " 👑" : "";
+      const online = acc.session.idToken && acc.session.exp > now ? "🟢" : "🔴";
+      const rooms = acc.rooms.size ? [...acc.rooms].join(", ") : "(none)";
+      const busy = acc.pendingSends || acc.queueDepth ? ` ⏳${acc.pendingSends} q:${acc.queueDepth}` : "";
+      lines.push(`  ${online} @${acc.username}${tag}${busy}`);
+      lines.push(`     rooms: [${rooms}]`);
+    }
+    lines.push("");
+
+    // ── SERVICES ──
+    lines.push(`⚙️ **Services**`);
+    const ap = mgr.autoPick;
+    const apOvOn = [...ap.rooms].filter(([, v]) => v).length;
+    const apOvOff = [...ap.rooms].filter(([, v]) => !v).length;
+    let apDesc = ap.global ? "✅ ON (all)" : "⛔ OFF";
+    if (apOvOn || apOvOff) apDesc += ` | ov: +${apOvOn}/-${apOvOff}`;
+    lines.push(`  🎁 Auto-pick    : ${apDesc} · picked: ${ap.sent}`);
+
+    const m = mgr.main;
+    if (m.autoTextOn) {
+      const prog = [...m.autoTextRooms].map(r => `${r}(${(m.autoTextIndex.get(r) || 0) + 1}/${m.autoTextMessages.length})`).join(", ") || "-";
+      lines.push(`  📝 Auto-text    : ✅ ON (${m.autoTextInterval}m, ${m.autoTextRooms.size} room, ${m.autoTextMessages.length} msgs) ${prog}`);
+    } else lines.push(`  📝 Auto-text    : ⛔ OFF`);
+
+    const arOn = mgr.list().filter(a => a.autoReplyOn).length;
+    lines.push(`  💬 Auto-reply   : ${arOn ? `✅ ON (${arOn} acct)` : "⛔ OFF"} · trigger: "${m.triggerKeyword || "-"}" · AI: ${hasAI() ? "🟢 configured" : "🔴 no key"}`);
+
+    const awOn = mgr.list().filter(a => a.awOn).length;
+    const awRooms = mgr.list().reduce((s, a) => s + a.awRooms.size, 0);
+    lines.push(`  👋 Welcome      : ${awOn ? `✅ ON (${awOn} acct${awRooms ? `, ${awRooms} rooms` : ", all"})` : "⛔ OFF"}`);
+
+    const agOn = mgr.list().filter(a => a.awgiftOn).length;
+    const agRooms = mgr.list().reduce((s, a) => s + a.awgiftRooms.size, 0);
+    lines.push(`  🎁 Auto-gift    : ${agOn ? `✅ ON (${agOn} acct, ${agRooms} rooms)` : "⛔ OFF"} · gift: "${m.awgiftName}" · cd: ${m.awgiftCooldownHours}h`);
+
+    const gsOn = mgr.list().filter(a => a.giftOn).length;
+    const gsRooms = mgr.list().reduce((s, a) => s + a.giftRooms.size, 0);
+    lines.push(`  🎁 Gift bcast   : ${gsOn ? `✅ ON (${gsOn} acct, ${gsRooms} rooms)` : "⛔ OFF"}`);
+
+    const flOn = mgr.list().filter(a => a.floodActive).length;
+    lines.push(`  🌊 Flood        : ${flOn ? `✅ ON (${flOn} acct)` : "⛔ OFF"}`);
+
+    lines.push(`  🚫 Slang        : ${slangGlobalOn ? "✅ ON (global)" : "⛔ OFF"} · ${slangWords.length} words · ${slangRoomOverrides.size} room overrides`);
+    lines.push(`  🎭 Client cmds  : ${Object.keys(clientCommands).length}/${DEFAULT_ALL_COMMANDS.length} templates`);
+    lines.push(`  🎓 Learn        : ${mgr.learn ? `⏳ waiting in [${mgr.learn.room}] ${mgr.learn.i}/${mgr.learn.items.length}` : "idle"}`);
+    lines.push("");
+
+    // ── PM CONTROL ──
+    lines.push(`📨 **PM Control**`);
+    lines.push(`  Parents    : ${parentUids.size ? [...parentUids.keys()].join(", ") : "(none)"}`);
+    lines.push(`  Status     : ${pmClient ? "✅ active" : "⛔ inactive"} · last: ${fmtAgo(lastPMAt)} · poll: ${pmClient ? fmtAgo(pmLastOkAt) : "n/a"} · queue: ${pmQueue.length}${pmBusy ? " (working)" : ""}`);
+    lines.push("");
+
+    // ── ROOM LISTENERS ──
+    lines.push(`🏠 **Room Listeners** (${listeners.size})`);
+    if (!listeners.size) lines.push(`  (none — use |jn <Room>)`);
+    for (const [room, tok] of listeners) {
+      const age = Math.round((now - tok.lastOk) / 1000);
+      const st = roomState.get(room);
+      const seen = st ? st.seen.size : 0;
+      const warn = age > STALL_MS / 1000 ? " ⚠ (stalled)" : "";
+      lines.push(`  [${room}] last poll: ${age}s ago · seen: ${seen}${warn}`);
+    }
+    lines.push("");
+
+    // ── TIMERS ──
+    lines.push(`⏱ **Intervals**`);
+    lines.push(`  Presence: ${PRESENCE_MS / 1000}s · Poll: ${POLL_MS / 1000}s · PM: ${PM_POLL_MS / 1000}s`);
+    lines.push(`  Heartbeat: ${HEARTBEAT_MS / 1000}s · Watchdog: 10s · Stall: ${STALL_MS / 1000}s`);
+    lines.push(`  Timeouts: HTTP ${HTTP_TIMEOUT_MS / 1000}s · SEND ${SEND_TIMEOUT_MS / 1000}s · CMD ${CMD_TIMEOUT_MS / 1000}s · GIFT ${GIFT_TIMEOUT_MS / 1000}s`);
+    lines.push(`  Gaps: bulk ${SEND_GAP_MS}ms · fast ${FAST_GAP_MS}ms · Max PM: ${MAX_PM_LEN}c`);
+    lines.push("");
+
+    // ── ACTIVITY ──
+    lines.push(`📊 **Activity**`);
+    lines.push(`  Last PM    : ${fmtAgo(lastPMAt)}`);
+    lines.push(`  Last room  : ${fmtAgo(lastRoomMsgAt)}`);
+    lines.push(`  Node       : ${process.version}`);
+    lines.push(`  Known rooms: ${mgr.knownRooms.size}`);
+
+    return lines.join("\n");
+  },
+
   async diag(mgr) {
     const up = Math.round(process.uptime());
     const mem = Math.round(process.memoryUsage().rss / 1024 / 1024);
-    let msg = `🔍 Diagnostic\n`;
-    msg += `  Uptime  : ${up}s\n`;
+    const now = Date.now();
+    let msg = `🔍 **Diagnostic**\n`;
+    msg += `  Uptime  : ${fmtDuration(up)}\n`;
     msg += `  Memory  : ${mem} MB\n`;
     msg += `  Cmds    : ${Object.keys(clientCommands).length}/${DEFAULT_ALL_COMMANDS.length}\n`;
-    msg += `  Timeouts: HTTP=${HTTP_TIMEOUT_MS} SEND=${SEND_TIMEOUT_MS} CMD=${CMD_TIMEOUT_MS} GIFT=${GIFT_TIMEOUT_MS} GAP=${SEND_GAP_MS}/${FAST_GAP_MS}\n`;
+    msg += `  Timeouts: HTTP=${HTTP_TIMEOUT_MS} SEND=${SEND_TIMEOUT_MS} CMD=${CMD_TIMEOUT_MS} GIFT=${GIFT_TIMEOUT_MS}\n`;
     msg += `  Slang   : ${slangWords.length} words, global=${slangGlobalOn ? "ON" : "OFF"}, overrides=${slangRoomOverrides.size}\n`;
-    msg += `  PM queue: ${pmQueue.length}${pmBusy ? " (working)" : ""}, poll age: ${Math.round((Date.now() - pmLastOkAt) / 1000)}s\n`;
+    msg += `  PM queue: ${pmQueue.length}${pmBusy ? " (working)" : ""}, poll age: ${pmClient ? Math.round((now - pmLastOkAt) / 1000) + "s" : "n/a"}\n`;
     msg += `  Rooms   : ${listeners.size}\n`;
-    for (const [r, t] of listeners) msg += `    [${r}] poll age: ${Math.round((Date.now() - t.lastOk) / 1000)}s\n`;
+    for (const [r, t] of listeners) msg += `    [${r}] poll age: ${Math.round((now - t.lastOk) / 1000)}s\n`;
     for (const acc of mgr.list()) {
       msg += `\n  @${acc.username}${acc.isMain ? " 👑" : ""} — rooms:${acc.rooms.size} q:${acc.queueDepth}⏳${acc.pendingSends}\n`;
       msg += `    AT:${acc.autoTextOn ? "ON" : "OFF"} AR:${acc.autoReplyOn ? "ON" : "OFF"} AWGIFT:${acc.awgiftOn ? "ON" : "OFF"} GS:${acc.giftOn ? "ON" : "OFF"}\n`;
@@ -1179,7 +1261,6 @@ const COMMANDS = {
     return msg;
   },
 
-  // NEW: reset templates to defaults
   async resetcmds() {
     clientCommands = { ...DEFAULT_CLIENT_COMMANDS };
     if (!saveClientCommands()) return "❌ save failed";
@@ -1267,43 +1348,64 @@ const COMMANDS = {
 
   async help(_m, _a, p) {
     return [
-      "📖 Commands",
+      "📖 **Commands**",
       "",
-      "👥 " + `${p}lnu user:pass  ${p}ltu user  ${p}accounts  ${p}use main|all|a,b`,
-      "🏠 " + `${p}jn Room  ${p}lr Room|all  ${p}tr Room <text>`,
-      "🌊 " + `${p}flood Room <text>  ${p}autoflood Room  ${p}flood stop  ${p}flood reload  ${p}flood status`,
-      "📝 " + `${p}at on Room  ${p}at off [Room]  ${p}at interval <min>  ${p}at reload  ${p}at status`,
-      "👋 " + `${p}aw on|off [Room]  ${p}aw_msg <text>`,
-      "🎁 " + `${p}awgift on Room  ${p}awgift off Room|all  ${p}awgift time <h>  ${p}awgift status`,
-      "🎁 " + `${p}gs on Room  ${p}gs off [Room]  ${p}gs status  ${p}setgift <name>  ${p}giftinterval <sec>`,
-      "💬 " + `${p}ar on|off  ${p}settrigger <keyword>  ${p}checktrigger`,
-      "🎁 " + `${p}vp on|off [Room]  (alias for ${p}ap)`,
-      "♻️ " + `${p}reset` + "  — clear stuck queues/timers",
-      "🔍 " + `${p}diag` + "  — full diagnostic snapshot",
-      "🌐 " + `${p}wip`,
-      "🚫 " + `${p}sd on|off [Room]  ${p}sd reset [Room]  ${p}sd status  ${p}addslang w1,w2  ${p}removeslang w1,w2  ${p}listslang  ${p}viewsh  ${p}clearsh`,
+      "📊 **Status**",
+      `  ${p}status  — full bot status (accounts, services, rooms, timers)`,
+      `  ${p}diag    — technical diagnostic (queues, poll ages)`,
       "",
-      "🎭 CLIENT-SIDE /COMMANDS:",
-      "  " + `${p}cmds [filter]` + "   — list templates",
-      "  " + `${p}missing` + "         — show commands still needing templates",
-      "  " + `${p}addcmd /cmd <template>` + "  — add/update",
-      "  " + `${p}delcmd /cmd` + "        — remove",
-      "  " + `${p}rendercheck /cmd args` + "  — preview output",
-      "  " + `${p}resetcmds` + "        — reset templates to defaults",
-      "  " + `${p}learn Room [@user] /cmd target ; /cmd2` + "  — copy the web's exact text",
+      "👥 **Accounts**",
+      `  ${p}lnu user:pass   log in`,
+      `  ${p}ltu user        log out`,
+      `  ${p}accounts        list`,
+      `  ${p}use main|all|a,b`,
       "",
-      "  Placeholders:",
-      "    {username}            bot's name",
-      "    {arg}                 arg or \"everyone\" if none",
-      "    {arg:fallback}        explicit fallback",
-      "    {roll} {roll:N}       random 1..100 / 1..N",
-      "    {random} {random:N}   same",
+      "🏠 **Rooms**",
+      `  ${p}jn Room         join`,
+      `  ${p}lr Room|all     leave`,
+      `  ${p}tr Room <text>  send text`,
       "",
-      "  Examples:",
-      "    " + `${p}tr Bangladesh /agree` + "       → **fan agrees with everyone! 👍**",
-      "    " + `${p}tr Bangladesh /agree vip` + "   → **fan agrees with vip! 👍**",
-      "    " + `${p}tr Bangladesh /roll` + "        → **fan rolls 42**",
-      "    " + `${p}tr Bangladesh /roll 20` + "     → **fan rolls 14** (1-20)",
+      "🌊 **Flood**",
+      `  ${p}flood Room <text>  ${p}autoflood Room  ${p}flood stop|reload|status`,
+      "",
+      "📝 **Auto-Text**",
+      `  ${p}at on Room  ${p}at off [Room]  ${p}at interval <min>  ${p}at reload  ${p}at status`,
+      "",
+      "👋 **Auto-Welcome**",
+      `  ${p}aw on|off [Room]  ${p}aw_msg <text>  ${p}aw_msg #<Room> <text>`,
+      "",
+      "🎁 **Auto-Gift on Join**",
+      `  ${p}awgift on Room  ${p}awgift off Room|all  ${p}awgift time <h>  ${p}awgift status`,
+      `  ${p}setawgift <name>  ${p}sawgm <msg>`,
+      "",
+      "🎁 **Gift Broadcast**",
+      `  ${p}gs on Room  ${p}gs off [Room]  ${p}gs status  ${p}setgift <name>  ${p}giftinterval <sec>`,
+      "",
+      "💬 **Auto-Reply**",
+      `  ${p}ar on|off  ${p}settrigger <keyword>  ${p}checktrigger`,
+      "",
+      "🎁 **Voucher**",
+      `  ${p}ap on|off [Room]  (alias: ${p}vp)`,
+      "",
+      "🚫 **Slang**",
+      `  ${p}sd on|off [Room]  ${p}sd reset [Room]  ${p}sd status`,
+      `  ${p}addslang w1,w2  ${p}removeslang w1,w2  ${p}listslang  ${p}viewsh  ${p}clearsh`,
+      "",
+      "🎭 **Client /Commands**",
+      `  ${p}cmds [filter]           list templates`,
+      `  ${p}missing                 show commands still needing templates`,
+      `  ${p}addcmd /cmd <template>  add/update`,
+      `  ${p}delcmd /cmd             remove`,
+      `  ${p}rendercheck /cmd args   preview output`,
+      `  ${p}resetcmds               reset to defaults`,
+      `  ${p}learn Room [@user] /cmd target ; /cmd2  copy the web's exact text`,
+      "",
+      "  Placeholders: {username} {arg} {arg:fallback} {roll} {roll:N} {random} {random:N}",
+      "",
+      "♻️ **Recovery**",
+      `  ${p}reset  — clear stuck queues/timers`,
+      "",
+      "🌐 " + `${p}wip  — show public IP`,
       "",
       "💡 Targets: $aa = all sub-accounts, $name = specific account",
     ].join("\n");
@@ -1328,14 +1430,12 @@ function learnCapture(mgr, room, sender, f, text) {
   if (!L || room.toLowerCase() !== L.room.toLowerCase() || sender.toLowerCase() !== L.user) return false;
   if (["room_entry", "room_leave", "voucher_drop", "gift"].includes(f.type)) return false;
   const t = String(text || "").trim();
-  // Only handle rendered-action messages (contain sender name, no "sender: " prefix)
   const isAction = !t.startsWith(sender + ": ") && t.toLowerCase().includes(L.user);
-  if (!isAction) return false;   // plain chat — let normal handlers run
+  if (!isAction) return false;
   const step = L.items[L.i];
-  if (!step) return true;        // suppress extra actions after done
+  if (!step) return true;
   const tpl = deriveTemplate(t, sender, step.arg);
   const prev = clientCommands[step.cmd];
-  // BUG FIX: string prev becomes {with: prev, bare: prev} so we don't lose the other case
   let obj;
   if (prev && typeof prev === "object") obj = { ...prev };
   else if (typeof prev === "string") obj = { with: prev, bare: prev };
@@ -1432,9 +1532,43 @@ function buildReplyFields(tpl, { me, meUid, other, otherUid, receivedText, text 
   const fields = {}; for (const [k, v] of Object.entries(tpl)) { const r = swap(v, k, true); if (r) fields[k] = r; }
   return { fields, tsFields };
 }
+
+// Split long text into <=max chunks (prefer line breaks)
+function splitForPM(text, max = MAX_PM_LEN) {
+  const out = [];
+  let rest = String(text || "");
+  while (rest.length > max) {
+    let cut = rest.lastIndexOf("\n", max);
+    if (cut < max * 0.4) cut = rest.lastIndexOf(" ", max);
+    if (cut < max * 0.3) cut = max;
+    out.push(rest.slice(0, cut));
+    rest = rest.slice(cut).replace(/^\s+/, "");
+  }
+  if (rest.length) out.push(rest);
+  return out;
+}
+
 async function sendPM(session, incoming, text) {
-  const { fields, tsFields } = buildReplyFields(incoming.raw.fields || {}, { me: session.username, meUid: session.uid, other: incoming.from, otherUid: incoming.fromUid, receivedText: incoming.text, text });
-  await commit(session, [{ update: { name: docName(`private_messages/${autoId()}`), fields }, updateTransforms: (tsFields.length ? tsFields : ["createdAt"]).map(REQ_TIME), currentDocument: { exists: false } }]);
+  const parts = splitForPM(text);
+  for (let i = 0; i < parts.length; i++) {
+    const part = parts[i];
+    try {
+      const { fields, tsFields } = buildReplyFields(incoming.raw.fields || {}, {
+        me: session.username, meUid: session.uid,
+        other: incoming.from, otherUid: incoming.fromUid,
+        receivedText: incoming.text, text: part,
+      });
+      await commit(session, [{
+        update: { name: docName(`private_messages/${autoId()}`), fields },
+        updateTransforms: (tsFields.length ? tsFields : ["createdAt"]).map(REQ_TIME),
+        currentDocument: { exists: false },
+      }]);
+      if (parts.length > 1) log(`📨 PM part ${i + 1}/${parts.length} (${part.length} chars)`);
+    } catch (e) {
+      log(`✖ PM part ${i + 1}/${parts.length} failed: ${e.message.slice(0, 120)}`);
+      throw e;
+    }
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1471,8 +1605,6 @@ async function handleRoomMessage(room, sender, body) {
   const reply = await fn(args, sender, room); if (reply) main.say(room, `@${sender} ${reply}`).catch(() => {});
 }
 function roomSlangOn(room) { const key = room.toLowerCase(); return slangRoomOverrides.has(key) ? slangRoomOverrides.get(key) : slangGlobalOn; }
-
-// FIX: detection stays sync, enforcement is fire-and-forget — returns in <1ms
 async function checkSlang(room, sender, text) {
   if (!slangMatchers.length || !roomSlangOn(room)) return false;
   const lower = text.toLowerCase();
@@ -1481,7 +1613,6 @@ async function checkSlang(room, sender, text) {
   if (!hit) return false;
   main.log(`🚫 slang @${sender} [${room}]: "${text.slice(0, 60)}" (${hit})`);
   const { action, count } = addSlangViolation(sender, room);
-  // fire and forget — never blocks anything
   if (action === "bump") {
     main.cmd(room, FN_BUMP, { roomId: room, targetUsername: sender }, `/bump ${sender}`).catch(() => {});
     main.say(room, `🚫 @${sender} bumped.`).catch(() => {});
@@ -1492,7 +1623,6 @@ async function checkSlang(room, sender, text) {
   }
   return true;
 }
-
 async function tryAutoReply(room, sender, text) {
   if (!main.autoReplyOn) return;
   const kw = (main.triggerKeyword || "").toLowerCase(); if (!kw || !text.toLowerCase().includes(kw)) return;
@@ -1549,7 +1679,6 @@ function autoPickVoucher(acc, mgr, room, f) {
     .catch((e) => log(`✖ [${room}] pick ${v.code}: ${e.message.slice(0, 100)}`));
   return true;
 }
-
 function processMsg(room, doc) {
   const st = roomState.get(room); if (!st) return;
   const id = doc.name.split("/").pop(); if (st.seen.has(id)) return;
@@ -1572,7 +1701,6 @@ function processMsg(room, doc) {
     await Promise.allSettled([tryAutoReply(room, sender, body), handleRoomMessage(room, sender, body)]);
   })().catch((e) => log("msg handler:", e.message.slice(0, 100)));
 }
-
 async function initRoom(room) {
   const latest = await latestMessages(main.session, room, 30);
   const st = { after: new Date().toISOString(), seen: new Set() };
@@ -1580,23 +1708,17 @@ async function initRoom(room) {
   if (latest[0]) { const c = decFields(latest[0].fields).createdAt; if (c) st.after = c; }
   roomState.set(room, st);
 }
-
 function startListening(room) {
   if (listeners.has(room)) return;
   const tok = { stop: false, lastOk: Date.now() }; listeners.set(room, tok);
   (async () => {
-    // init retry cap: 10 attempts × 25s = ~4 min before giving up on this room
     let initTries = 0;
     while (!tok.stop && !roomState.has(room) && initTries < 10) {
       initTries++;
       try { await withTimeout(initRoom(room), 25000, "init"); log(`✔ [${room}] listening`); }
-      catch (e) {
-        log(`✖ [${room}] init ${initTries}/10 failed (${e.message.slice(0, 60)}) — retrying`);
-        await sleep(3000);
-      }
+      catch (e) { log(`✖ [${room}] init ${initTries}/10 failed (${e.message.slice(0, 60)}) — retrying`); await sleep(3000); }
     }
     if (!roomState.has(room)) { log(`✖ [${room}] gave up after 10 attempts`); listeners.delete(room); return; }
-
     let errors = 0;
     while (!tok.stop) {
       try {
@@ -1621,8 +1743,12 @@ async function handlePM(m) {
   const reply = await controller.handle(m.text);
   if (reply !== null) {
     const cmdName = (m.text || "").trim().split(/\s+/)[0];
-    log(`⚙ ${cmdName} → ${reply.split("\n")[0].slice(0, 100)}`);
-    if (PM_REPLY) await sendPM(main.session, m, reply).catch(() => {}); return;
+    log(`⚙ ${cmdName} → ${reply.split("\n")[0].slice(0, 100)} [len=${reply.length}]`);
+    if (PM_REPLY) {
+      try { await sendPM(main.session, m, reply); }
+      catch (e) { log(`✖ PM reply failed for ${cmdName}: ${e.message.slice(0, 140)}`); }
+    }
+    return;
   }
   if (!main.autoReplyOn) return;
   const text = (m.text || "").trim();
@@ -1631,7 +1757,6 @@ async function handlePM(m) {
   if (kw && text.toLowerCase().includes(kw) && hasAI()) { const q = text.replace(new RegExp(kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), "").trim() || text; const ai = await askAI(q); if (PM_REPLY) await sendPM(main.session, m, ai).catch(() => {}); }
 }
 
-// PM commands serialized (they share state), polling never blocks
 let pmClient = null, pmGen = 0, pmLastOkAt = Date.now(), pmBusy = false;
 const pmQueue = [];
 async function pmWorker() {
@@ -1663,7 +1788,6 @@ async function pmLoop() {
   }
 }
 
-// Watchdog: FIX — deletes roomState so restart re-initializes cleanly
 function startWatchdog() {
   setInterval(() => {
     const now = Date.now();
@@ -1688,7 +1812,6 @@ function startHealthServer() {
   const port = PORT || 3000;
   http.createServer((_req, res) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify({ status: "online", bot: USER, uptime: Math.round(process.uptime()) })); }).listen(port, "0.0.0.0", () => log(`🌐 health on :${port}`));
 }
-
 function startHeartbeat() {
   setInterval(() => {
     const up = Math.round(process.uptime());
@@ -1726,8 +1849,8 @@ async function startBot() {
   const known = Object.keys(clientCommands).length;
   const total = DEFAULT_ALL_COMMANDS.length;
   log(`Bot running. Auto-pick=${manager.autoPick.global ? "ON" : "OFF"} Auto-text=${main.autoTextOn ? "ON" : "OFF"} Auto-reply=${main.autoReplyOn ? "ON" : "OFF"} Awgift=${main.awgiftOn ? "ON" : "OFF"} ClientCmds=${known}/${total}.`);
-  log(`Timeouts: HTTP=${HTTP_TIMEOUT_MS}ms SEND=${SEND_TIMEOUT_MS}ms CMD=${CMD_TIMEOUT_MS}ms GIFT=${GIFT_TIMEOUT_MS}ms GAP=${SEND_GAP_MS}/${FAST_GAP_MS}ms STALL=${STALL_MS}ms`);
-  log(`Diag: |diag. Reset: |reset |resetcmds`);
+  log(`Timeouts: HTTP=${HTTP_TIMEOUT_MS}ms SEND=${SEND_TIMEOUT_MS}ms CMD=${CMD_TIMEOUT_MS}ms GIFT=${GIFT_TIMEOUT_MS}ms GAP=${SEND_GAP_MS}/${FAST_GAP_MS}ms STALL=${STALL_MS}ms MAX_PM=${MAX_PM_LEN}c`);
+  log(`Diag: |status |diag. Reset: |reset |resetcmds`);
   process.on("SIGINT", async () => { log("Shutting down..."); await manager.stopAll(); process.exit(0); });
 }
 
@@ -1740,5 +1863,5 @@ module.exports = {
   Session, Account, Manager, Controller, matchRoom, buildReplyFields, normalizePM,
   parseVoucher, autoPickVoucher, callFunction, applyAutoTextDefaults, applyAwgiftDefaults,
   extractEntryUser, renderClientCommand, renderSlash, deriveTemplate, learnCapture, finishLearn, fillTemplate,
-  fetchRoomUsers, fetchT, withTimeout, enc, decFields,
+  splitForPM, fetchRoomUsers, fetchT, withTimeout, enc, decFields,
 };
